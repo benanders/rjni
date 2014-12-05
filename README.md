@@ -7,17 +7,15 @@ Currently only OSX is supported, as I haven't got around to testing/making the A
 
 ### Examples
 
-*Calling a static method:*
+_Calling a static method:_
 
 ```java
 // Test.java
 
 public class Test {
-
 	public static int square(int number) {
 		return number * number;
 	}
-
 }
 ```
 
@@ -48,13 +46,12 @@ fn main() {
 }
 ```
 
-*Instantiating an object and calling an object method:*
+_Instantiating an object and calling an object method:_
 
 ```java
 // Test.java
 
 public class Test {
-
 	public int current;
 
 	// The constructor
@@ -69,7 +66,6 @@ public class Test {
 	public int getCurrent() {
 		return this.current;
 	}
-
 }
 ```
 
