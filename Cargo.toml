@@ -1,0 +1,5 @@
+[package]
+
+name = "p2prs"
+version = "0.0.1"
+authors = ["Ben Anderson <gravityscore@gmail.com>"]
