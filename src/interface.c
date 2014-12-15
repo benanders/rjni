@@ -6,6 +6,7 @@
 #include <jni.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #define TYPE_BYTE		0
 #define TYPE_SHORT	1
@@ -109,6 +110,8 @@ jvalue * args_to_jni_args(int count, int *types, void **values) {
 		if (value != NULL && type != TYPE_VOID) {
 			args[i] = value_to_jni_value(type, value);
 		}
+
+		free(value);
 	}
 
 	return args;

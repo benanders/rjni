@@ -37,7 +37,7 @@ fn main() {
 	// The first argument is the name of the static, the second is an array
 	// containing the arguments to pass into the static, and the third
 	// is the return type of the static.
-	let result = class.call_static_method("add", &[Value::Int(5), Value::Int(7)], Type::Int);
+	let value = class.call_static_method("add", &[Value::Int(7), Value::Int(9)], Type::Int);
 
 	// Print the value that was returned by the static method.
 	println!("{}", value);

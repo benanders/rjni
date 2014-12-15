@@ -7,7 +7,7 @@
 
 extern crate libc;
 
-use std::ptr;
+use std::mem;
 
 mod ffi;
 
@@ -117,7 +117,6 @@ pub enum Value {
 	Double(f64),
 	Boolean(bool),
 	Char(char),
-	Void,
 }
 
 
@@ -135,7 +134,6 @@ impl Value {
 			Value::Double(_) => Type::Double,
 			Value::Boolean(_) => Type::Boolean,
 			Value::Char(_) => Type::Char,
-			Value::Void => Type::Void,
 		}
 	}
 
@@ -174,6 +172,21 @@ impl Type {
 		}
 	}
 
+	/// Returns the number of bytes required to store this type.
+	fn bytes(&self) -> uint {
+		match *self {
+			Type::Byte => mem::size_of::<u8>(),
+			Type::Short => mem::size_of::<u16>(),
+			Type::Int => mem::size_of::<u32>(),
+			Type::Long => mem::size_of::<u64>(),
+			Type::Float => mem::size_of::<f32>(),
+			Type::Double => mem::size_of::<f64>(),
+			Type::Boolean => mem::size_of::<u32>(),
+			Type::Char => mem::size_of::<u8>(),
+			Type::Void => 0,
+		}
+	}
+
 }
 
 
@@ -198,30 +211,36 @@ fn signature_for_function(arguments: &[Value], return_type: Type) -> String {
 
 
 /// Converts each value in the arguments array into a void pointer.
-fn arguments_to_void_pointers<T>(arguments: &[Value], callback: |&mut Vec<*mut libc::c_void>| -> T)
+fn arguments_to_void_pointers<T>(arguments: &[Value], callback: |Vec<*mut libc::c_void>| -> T)
 		-> T {
 	let mut values = Vec::new();
 	for value in arguments.iter() {
-		// Convert to a void pointer
-		let ptr = match *value {
-			Value::Byte(mut v) => &mut v as *mut _ as *mut libc::c_void,
-			Value::Short(mut v) => &mut v as *mut _ as *mut libc::c_void,
-			Value::Int(mut v) => &mut v as *mut _ as *mut libc::c_void,
-			Value::Long(mut v) => &mut v as *mut _ as *mut libc::c_void,
-			Value::Float(mut v) => &mut v as *mut _ as *mut libc::c_void,
-			Value::Double(mut v) => &mut v as *mut _ as *mut libc::c_void,
-			Value::Boolean(v) => {
-				let mut as_int: i32 = if v { 1 } else { 0 };
-				&mut as_int as *mut _ as *mut libc::c_void
-			},
-			Value::Char(mut v) => &mut v as *mut _ as *mut libc::c_void,
-			Value::Void => ptr::null_mut(),
+		let ptr = unsafe {
+			// Allocate heap space for the argument
+			let ptr = libc::malloc(value.to_type().bytes() as u64);
+
+			// Convert to a void pointer
+			*ptr = *(match *value {
+				Value::Byte(mut v) => &mut v as *mut _ as *mut libc::c_void,
+				Value::Short(mut v) => &mut v as *mut _ as *mut libc::c_void,
+				Value::Int(mut v) => &mut v as *mut _ as *mut libc::c_void,
+				Value::Long(mut v) => &mut v as *mut _ as *mut libc::c_void,
+				Value::Float(mut v) => &mut v as *mut _ as *mut libc::c_void,
+				Value::Double(mut v) => &mut v as *mut _ as *mut libc::c_void,
+				Value::Boolean(v) => {
+					let mut as_int: i32 = if v { 1 } else { 0 };
+					&mut as_int as *mut _ as *mut libc::c_void
+				},
+				Value::Char(mut v) => &mut v as *mut _ as *mut libc::c_void,
+			});
+
+			ptr
 		};
 
 		values.push(ptr);
 	}
 
-	callback(&mut values)
+	callback(values)
 }
 
 
@@ -245,7 +264,7 @@ impl Class {
 		let mut types = ffi::arguments_to_type_list(constructor_arguments);
 		let signature = signature_for_function(constructor_arguments, Type::Void);
 
-		arguments_to_void_pointers(constructor_arguments, |values| {
+		arguments_to_void_pointers(constructor_arguments, |mut values| {
 			unsafe {
 				let object_ptr = ffi::create_object(
 					self.java_class,
@@ -275,7 +294,7 @@ impl Class {
 		let mut types = ffi::arguments_to_type_list(arguments);
 		let signature = signature_for_function(arguments, return_type);
 
-		arguments_to_void_pointers(arguments, |values| {
+		arguments_to_void_pointers(arguments, |mut values| {
 			unsafe {
 				// Call the static method
 				let return_value = ffi::call_static_method(
@@ -320,7 +339,7 @@ impl Object {
 		let mut types = ffi::arguments_to_type_list(arguments);
 		let signature = signature_for_function(arguments, return_type);
 
-		arguments_to_void_pointers(arguments, |values| {
+		arguments_to_void_pointers(arguments, |mut values| {
 			unsafe {
 				// Call the static method
 				let return_value = ffi::call_method(
