@@ -24,11 +24,20 @@ pub struct JavaVM;
 
 impl JavaVM {
 
-	/// Creates a new Java virtual machine using the given class path.
+	/// Creates a new Java virtual machine using the given list
+	/// of directories as the classpath.
+	///
 	/// Returns None when the JVM failed to be created.
-	pub fn new(classpath: &str) -> Option<JavaVM> {
+	pub fn new(classpath_directories: &[Path]) -> Option<JavaVM> {
+		let mut classpath = String::new();
+		for dir in classpath_directories.iter() {
+			let string = dir.as_str().expect("Path could not be converted into a string");
+			classpath.push_str(string);
+			classpath.push(':');
+		}
+
 		let success = unsafe {
-			ffi::create_jvm(classpath.to_c_str().as_mut_ptr())
+			ffi::create_jvm(classpath.as_slice().to_c_str().as_mut_ptr())
 		};
 
 		if success != ffi::SUCCESS {
@@ -38,7 +47,8 @@ impl JavaVM {
 		}
 	}
 
-	/// Creates a class from the given name.
+	/// Creates a class from the given class name.
+	///
 	/// Note this doesn't instantiate an instance of this class.
 	/// Returns None if the class couldn't be found.
 	pub fn class(&self, name: &str) -> Option<Class> {
@@ -61,6 +71,7 @@ impl JavaVM {
 impl Drop for JavaVM {
 
 	fn drop(&mut self) {
+		// Destroy the JVM on drop
 		unsafe {
 			ffi::destroy_jvm();
 		}
@@ -184,9 +195,8 @@ fn signature_for_function(arguments: &[Value], return_type: Type) -> String {
 
 
 /// Converts each value in the arguments array into a void pointer.
-fn arguments_to_void_pointers<T>(arguments: &[Value],
-		callback: |&mut Vec<*mut libc::c_void>| -> T) -> T {
-	// Convert each argument to a void pointer
+fn arguments_to_void_pointers<T>(arguments: &[Value], callback: |&mut Vec<*mut libc::c_void>| -> T)
+		-> T {
 	let mut values = Vec::new();
 	for value in arguments.iter() {
 		// Convert to a void pointer
