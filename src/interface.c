@@ -99,6 +99,10 @@ jvalue value_to_jni_value(int type, void *content) {
 /// Note: Return value must be freed!
 jvalue * args_to_jni_args(int count, int *types, void **values) {
 	jvalue *args = malloc(sizeof(jvalue) * count);
+	if (args == NULL) {
+		return NULL;
+	}
+
 	for (int i = 0; i < count; i++) {
 		int type = types[i];
 		void *value = values[i];
@@ -129,9 +133,15 @@ void * call_static_method(void *java_class, char *name, char *signature, int ret
 
 	jvalue *result = NULL;
 	jvalue *args = args_to_jni_args(arg_count, arg_types, arg_values);
+	if (args == NULL) {
+		return NULL;
+	}
 
 	if (return_type != TYPE_VOID) {
 		result = malloc(sizeof(jvalue));
+		if (result == NULL) {
+			return NULL;
+		}
 
 		// Call the method
 		if (return_type == TYPE_BYTE) {
@@ -179,6 +189,10 @@ void * create_object(void *java_class, char *signature, int arg_count, int *arg_
 	}
 
 	jvalue *args = args_to_jni_args(arg_count, arg_types, arg_values);
+	if (args == NULL) {
+		return NULL;
+	}
+
 	jobject instance = (*env)->NewObjectA(env, cast_class, constructor_id, args);
 
 	free(args);
@@ -209,9 +223,15 @@ void * call_method(void *java_object, char *name, char *signature, int return_ty
 
 	jvalue *result = NULL;
 	jvalue *args = args_to_jni_args(arg_count, arg_types, arg_values);
+	if (args == NULL) {
+		return NULL;
+	}
 
 	if (return_type != TYPE_VOID) {
 		result = malloc(sizeof(jvalue));
+		if (result == NULL) {
+			return NULL;
+		}
 
 		// Call the method
 		if (return_type == TYPE_BYTE) {

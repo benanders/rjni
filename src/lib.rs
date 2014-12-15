@@ -89,7 +89,7 @@ impl Drop for JavaVM {
 /// Returns None if the type cannot be converted to a value (eg. if it is void).
 fn value_from_ptr(value_type: Type, content: *mut libc::c_void) -> Option<Value> {
 	unsafe {
-		match value_type {
+		let result = match value_type {
 			Type::Byte => Some(Value::Byte(*(content as *mut i8))),
 			Type::Short => Some(Value::Short(*(content as *mut i16))),
 			Type::Int => Some(Value::Int(*(content as *mut i32))),
@@ -99,7 +99,10 @@ fn value_from_ptr(value_type: Type, content: *mut libc::c_void) -> Option<Value>
 			Type::Boolean => Some(Value::Boolean(*(content as *mut i32) == 1)),
 			Type::Char => Some(Value::Char(*(content as *mut u8) as char)),
 			Type::Void => None,
-		}
+		};
+
+		libc::free(content);
+		result
 	}
 }
 
