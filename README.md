@@ -4,7 +4,7 @@ Java Native Interface Bindings for Rust
 
 This library provides a somewhat primitive binding to the Java Native Interface in Rust. Arrays and custom classes are not supported yet, just simple static method calling, object instantiation, and method calling on instantiated objects.
 
-I've only tested this on OSX, and you'll almost certainly get a linking error on any other OS due to the compiler not being able to find the jni.h file. I've only included the OSX include directory in the build script, but it should be fairly easy to change.
+I've only tested this on OSX, and you'll almost certainly get a linking error on any other OS due to the compiler not being able to find the jni.h file. I've only added the OSX include directory in the build script, but it should be fairly easy to change.
 
 ### Examples
 
@@ -14,8 +14,8 @@ _Calling a static method:_
 // Test.java
 
 public class Test {
-	public static int square(int number) {
-		return number * number;
+	public static int add(int a, int b) {
+		return a + b;
 	}
 }
 ```
@@ -28,21 +28,25 @@ extern crate jni;
 use jni::{JavaVM, Value, Type};
 
 fn main() {
-	// Create a new Java virtual machine, specifying the class path.
-	let jvm = JavaVM::new(".").expect("Failed to create Java virtual machine!");
+	// Create the Java virtual machine. The argument to this function
+	// is a list of paths that will be combined to create the Java
+	// classpath. The classpath is a list of directories the JVM
+	// will look in when trying to locate a .class or .jar file.
+	let jvm = JavaVM::new(&[Path::new(".")])
+		.expect("Failed to create Java virtual machine!");
 
-	// Load the Test class. Note this doesn't create an instance of the class!
-	let class = jvm.class("Test").expect("Couldn't find the class! Check your classpath.");
+	// Load the `Test` class. The JVM will look for a `Test.class` file in
+	// the classpath to find it.
+	let class = jvm.class("Test")
+		.expect("Couldn't find class `Test`!");
 
-	// Call the static function and get the return value.
-	// The first argument is the name of the static method, the second
-	// is the arguments that will be passed into the static function,
-	// and the third is the return type of the function.
-	// The function will return None if you've specified the wrong argument/return types,
-	// or the function couldn't be found.
-	let value = class.call_static_method("square", &[Value::Int(5)], Type::Int).unwrap();
+	// Call the static method.
+	// The first argument is the name of the static, the second is an array
+	// containing the arguments to pass into the static, and the third
+	// is the return type of the static.
+	let result = class.call_static_method("add", &[Value::Int(5), Value::Int(7)], Type::Int);
 
-	// Print out the value that we received from the static method.
+	// Print the value that was returned by the static method.
 	println!("{}", value);
 }
 ```
@@ -78,31 +82,39 @@ extern crate jni;
 use jni::{JavaVM, Value, Type};
 
 fn main() {
-	// Create the Java virtual machine, giving it the class path. The class path
-	// is the location the JVM will look for any compiled .class and .jar files,
-	// in order to locate a class.
-	let jvm = JavaVM::new(".").expect("Failed to create Java virtual machine!");
+	// Create the Java virtual machine. The argument to this function
+	// is a list of paths that will be combined to create the Java
+	// classpath. The classpath is a list of directories the JVM
+	// will look in when trying to locate a .class or .jar file.
+	let jvm = JavaVM::new(&[Path::new(".")])
+		.expect("Failed to create Java virtual machine!");
 
-	// Load the `Test` class. The JVM will look for a Test.class file in the class
-	// path to find it.
-	let class = jvm.class("Test").expect("Couldn't find class!");
+	// Load the `Test` class. The JVM will look for a `Test.class` file in
+	// the classpath to find it.
+	let class = jvm.class("Test")
+		.expect("Couldn't find class `Test`!");
 
-	// Create an instance of the `Test` class. The array of values is the arguments
+	// Create an instance of the `Test` class. The array of values are the arguments
 	// to be passed to the class' constructor. In this case, the Test class'
-	// constructor takes a single integer as its arguments.
-	let object = class.instance(&[Value::Int(5)]).expect("Couldn't instantiate class!");
+	// constructor takes a single integer as an argument.
+	//
+	// A none value will be returned if the constructor's arguments are invalid,
+	// a Java error occurred, or any other reason the JNI can come up with.
+	let object = class.instance(&[Value::Int(5)])
+		.expect("Couldn't instantiate class!");
 
-	// Call the method `incrementCurrent` on the instance we just created.
-	// The empty array is the arguments to pass into the function, and the
-	// last type is the return type of the function (in this case, void).
+	// Call the method `incrementCurrent` on the object we just created.
+	// The empty array specifies the arguments to pass into the function,
+	// and the second argument is the return type of the function (in
+	// this case, void).
 	object.call("incrementCurrent", &[], Type::Void);
 
-	// Call the `getCurrent` method on the instance, and assign its
-	// result to `value`. In this case, the function takes no arguments
-	// and returns an integer.
+	// Call the `getCurrent` method on the object, and assign its
+	// return value to `value`. In this case, the function takes no
+	// arguments and returns an integer.
 	let value = object.call("getCurrent", &[], Type::Int).unwrap();
 
-	// Print the value we just received.
+	// Print the value we just fetched from the object.
 	println!("{}", value);
 }
 ```

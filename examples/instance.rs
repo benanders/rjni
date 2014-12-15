@@ -1,7 +1,7 @@
 
 //
-//  Example
-//  A simple example to load a test Java application (Test.java) and execute it.
+//  Instance
+//  An example that creates an instance of a Java class and calls a method on it.
 //
 
 extern crate jni;
@@ -37,8 +37,8 @@ fn main() {
 	// to be passed to the class' constructor. In this case, the Test class'
 	// constructor takes a single integer as an argument.
 	//
-	// A none value might be returned if the constructor's arguments are invalid,
-	// or a Java error occurred, or any other reason the JNI can come up with.
+	// A none value will be returned if the constructor's arguments are invalid,
+	// a Java error occurred, or any other reason the JNI can come up with.
 	let object = class.instance(&[Value::Int(5)])
 		.expect("Couldn't instantiate class!");
 
