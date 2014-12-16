@@ -89,7 +89,7 @@ jvalue value_to_jni_value(int type, void *content) {
 	} else if (type == TYPE_CHAR) {
 		result.c = *((jchar *) content);
 	} else if (type == TYPE_STRING) {
-		result.l = *((jstring *) content);
+		result.l = (*env)->NewStringUTF(env, (char *) content);
 	}
 
 	return result;
@@ -134,13 +134,13 @@ void * call_static_method(void *java_class, char *name, char *signature, int ret
 		return NULL;
 	}
 
-	jvalue *result = NULL;
 	jvalue *args = args_to_jni_args(arg_count, arg_types, arg_values);
 	if (args == NULL) {
 		return NULL;
 	}
 
-	if (return_type != TYPE_VOID) {
+	void *result = NULL;
+	if (return_type != TYPE_VOID && return_type != TYPE_STRING) {
 		result = malloc(sizeof(jvalue));
 		if (result == NULL) {
 			return NULL;
@@ -148,24 +148,43 @@ void * call_static_method(void *java_class, char *name, char *signature, int ret
 
 		// Call the method
 		if (return_type == TYPE_BYTE) {
-			result->b = (*env)->CallStaticByteMethodA(env, cast_class, method_id, args);
+			((jvalue *) result)->b =
+				(*env)->CallStaticByteMethodA(env, cast_class, method_id, args);
 		} else if (return_type == TYPE_SHORT) {
-			result->s = (*env)->CallStaticShortMethodA(env, cast_class, method_id, args);
+			((jvalue *) result)->s =
+				(*env)->CallStaticShortMethodA(env, cast_class, method_id, args);
 		} else if (return_type == TYPE_INT) {
-			result->i = (*env)->CallStaticIntMethodA(env, cast_class, method_id, args);
+			((jvalue *) result)->i =
+				(*env)->CallStaticIntMethodA(env, cast_class, method_id, args);
 		} else if (return_type == TYPE_LONG) {
-			result->j = (*env)->CallStaticLongMethodA(env, cast_class, method_id, args);
+			((jvalue *) result)->j =
+				(*env)->CallStaticLongMethodA(env, cast_class, method_id, args);
 		} else if (return_type == TYPE_FLOAT) {
-			result->f = (*env)->CallStaticFloatMethodA(env, cast_class, method_id, args);
+			((jvalue *) result)->f =
+				(*env)->CallStaticFloatMethodA(env, cast_class, method_id, args);
 		} else if (return_type == TYPE_DOUBLE) {
-			result->d = (*env)->CallStaticDoubleMethodA(env, cast_class, method_id, args);
+			((jvalue *) result)->d =
+				(*env)->CallStaticDoubleMethodA(env, cast_class, method_id, args);
 		} else if (return_type == TYPE_BOOLEAN) {
-			result->z = (*env)->CallStaticBooleanMethodA(env, cast_class, method_id, args);
+			((jvalue *) result)->z =
+				(*env)->CallStaticBooleanMethodA(env, cast_class, method_id, args);
 		} else if (return_type == TYPE_CHAR) {
-			result->c = (*env)->CallStaticCharMethodA(env, cast_class, method_id, args);
-		} else if (return_type == TYPE_STRING) {
-			result->l = (*env)->CallStaticObjectMethodA(env, cast_class, method_id, args);
+			((jvalue *) result)->c =
+				(*env)->CallStaticCharMethodA(env, cast_class, method_id, args);
 		}
+	} else if (return_type == TYPE_STRING) {
+		jstring value = (*env)->CallStaticObjectMethodA(env, cast_class, method_id, args);
+
+		// Allocate the results buffer
+		int size = (*env)->GetStringUTFLength(env, value);
+		result = malloc(sizeof(char) * (size + 1));
+
+		// Get the string and copy it into the results buffer
+		const char *str = (*env)->GetStringUTFChars(env, value, NULL);
+		memcpy(result, str, size + 1);
+
+		// Free the Java string
+		(*env)->ReleaseStringUTFChars(env, value, str);
 	} else {
 		(*env)->CallStaticVoidMethodA(env, cast_class, method_id, args);
 	}
@@ -224,12 +243,12 @@ void * call_method(void *java_object, char *name, char *signature, int return_ty
 		return NULL;
 	}
 
-	jvalue *result = NULL;
 	jvalue *args = args_to_jni_args(arg_count, arg_types, arg_values);
 	if (args == NULL) {
 		return NULL;
 	}
 
+	jvalue *result = NULL;
 	if (return_type != TYPE_VOID) {
 		result = malloc(sizeof(jvalue));
 		if (result == NULL) {

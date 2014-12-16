@@ -8,6 +8,7 @@
 extern crate libc;
 
 use std::mem;
+use std::ptr;
 
 mod ffi;
 
@@ -98,6 +99,7 @@ fn value_from_ptr(value_type: Type, content: *mut libc::c_void) -> Option<Value>
 			Type::Double => Some(Value::Double(*(content as *mut libc::c_double) as f64)),
 			Type::Boolean => Some(Value::Boolean(*(content as *mut i32) == 1)),
 			Type::Char => Some(Value::Char(*(content as *mut u8) as char)),
+			Type::String => Some(Value::String(String::from_raw_buf(content as *const u8))),
 			Type::Void => None,
 		};
 
@@ -117,6 +119,7 @@ pub enum Value {
 	Double(f64),
 	Boolean(bool),
 	Char(char),
+	String(String),
 }
 
 
@@ -134,6 +137,23 @@ impl Value {
 			Value::Double(_) => Type::Double,
 			Value::Boolean(_) => Type::Boolean,
 			Value::Char(_) => Type::Char,
+			Value::String(_) => Type::String,
+		}
+	}
+
+	/// Returns the number of bytes this value requires when allocated.
+	pub fn bytes(&self) -> u64 {
+		match *self {
+			Value::Byte(_) => mem::size_of::<u8>() as u64,
+			Value::Short(_) => mem::size_of::<u16>() as u64,
+			Value::Int(_) => mem::size_of::<u32>() as u64,
+			Value::Long(_) => mem::size_of::<u64>() as u64,
+			Value::Float(_) => mem::size_of::<f32>() as u64,
+			Value::Double(_) => mem::size_of::<f64>() as u64,
+			Value::Boolean(_) => mem::size_of::<u32>() as u64,
+			Value::Char(_) => mem::size_of::<u8>() as u64,
+			Value::String(ref string) =>
+				(mem::size_of::<u8>() * (string.as_bytes().len() + 1)) as u64,
 		}
 	}
 
@@ -151,6 +171,7 @@ pub enum Type {
 	Double,
 	Boolean,
 	Char,
+	String,
 	Void,
 }
 
@@ -168,22 +189,8 @@ impl Type {
 			Type::Double => "D",
 			Type::Boolean => "Z",
 			Type::Char => "C",
+			Type::String => "Ljava/lang/String;",
 			Type::Void => "V",
-		}
-	}
-
-	/// Returns the number of bytes required to store this type.
-	fn bytes(&self) -> uint {
-		match *self {
-			Type::Byte => mem::size_of::<u8>(),
-			Type::Short => mem::size_of::<u16>(),
-			Type::Int => mem::size_of::<u32>(),
-			Type::Long => mem::size_of::<u64>(),
-			Type::Float => mem::size_of::<f32>(),
-			Type::Double => mem::size_of::<f64>(),
-			Type::Boolean => mem::size_of::<u32>(),
-			Type::Char => mem::size_of::<u8>(),
-			Type::Void => 0,
 		}
 	}
 
@@ -217,22 +224,28 @@ fn arguments_to_void_pointers<T>(arguments: &[Value], callback: |Vec<*mut libc::
 	for value in arguments.iter() {
 		let ptr = unsafe {
 			// Allocate heap space for the argument
-			let ptr = libc::malloc(value.to_type().bytes() as u64);
+			let size = value.bytes();
+			let ptr = libc::malloc(size);
 
 			// Convert to a void pointer
-			*ptr = *(match *value {
-				Value::Byte(mut v) => &mut v as *mut _ as *mut libc::c_void,
-				Value::Short(mut v) => &mut v as *mut _ as *mut libc::c_void,
-				Value::Int(mut v) => &mut v as *mut _ as *mut libc::c_void,
-				Value::Long(mut v) => &mut v as *mut _ as *mut libc::c_void,
-				Value::Float(mut v) => &mut v as *mut _ as *mut libc::c_void,
-				Value::Double(mut v) => &mut v as *mut _ as *mut libc::c_void,
+			let copy_ptr = match *value {
+				Value::Byte(v) => &v as *const _ as *const libc::c_void,
+				Value::Short(v) => &v as *const _ as *const libc::c_void,
+				Value::Int(v) => &v as *const _ as *const libc::c_void,
+				Value::Long(v) => &v as *const _ as *const libc::c_void,
+				Value::Float(v) => &v as *const _ as *const libc::c_void,
+				Value::Double(v) => &v as *const _ as *const libc::c_void,
 				Value::Boolean(v) => {
-					let mut as_int: i32 = if v { 1 } else { 0 };
-					&mut as_int as *mut _ as *mut libc::c_void
+					let as_int: i32 = if v { 1 } else { 0 };
+					&as_int as *const _ as *const libc::c_void
 				},
-				Value::Char(mut v) => &mut v as *mut _ as *mut libc::c_void,
-			});
+				Value::Char(v) => &v as *const _ as *const libc::c_void,
+				Value::String(ref v) =>
+					&v.to_c_str().as_mut_ptr() as *const _ as *const libc::c_void,
+			};
+
+			// Copy the pointer value across
+			ptr::copy_memory(ptr, copy_ptr, size as uint);
 
 			ptr
 		};

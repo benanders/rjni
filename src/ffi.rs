@@ -34,6 +34,7 @@ pub fn type_to_integer(t: Type) -> i32 {
 		Type::Double => TYPE_DOUBLE,
 		Type::Boolean => TYPE_BOOLEAN,
 		Type::Char => TYPE_CHAR,
+		Type::String => TYPE_STRING,
 		Type::Void => TYPE_VOID,
 	}
 }
