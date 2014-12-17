@@ -16,6 +16,7 @@ use std::ptr;
 mod ffi;
 
 
+/// Convert a variable into a pointer and copy it into `ptr`.
 macro_rules! copy_into_ptr(
 	($variable:expr, $ptr:expr, $size:expr) => (
 		ptr::copy_memory(
@@ -43,7 +44,7 @@ impl JavaVM {
 	/// of directories as the classpath.
 	///
 	/// Returns None when the JVM failed to be created.
-	pub fn new(classpath_directories: &[Path]) -> Option<JavaVM> {
+	pub fn new(classpath_directories: &[Path]) -> Result<JavaVM, Error> {
 		let mut classpath = String::new();
 		for dir in classpath_directories.iter() {
 			let string = dir.as_str().expect("Path could not be converted into a string");
@@ -56,9 +57,9 @@ impl JavaVM {
 		};
 
 		if success != ffi::SUCCESS {
-			None
+			Err(Error::from_status_code(ffi::error_status()))
 		} else {
-			Some(JavaVM)
+			Ok(JavaVM)
 		}
 	}
 
@@ -66,15 +67,15 @@ impl JavaVM {
 	///
 	/// Note this doesn't instantiate an instance of this class.
 	/// Returns None if the class couldn't be found.
-	pub fn class(&self, name: &str) -> Option<Class> {
+	pub fn class(&self, name: &str) -> Result<Class, Error> {
 		let ptr = unsafe {
 			ffi::class_from_name(name.to_c_str().as_mut_ptr())
 		};
 
 		if ptr.is_null() {
-			None
+			Err(Error::from_status_code(ffi::error_status()))
 		} else {
-			Some(Class {
+			Ok(Class {
 				java_class: ptr,
 			})
 		}
@@ -100,31 +101,6 @@ impl Drop for JavaVM {
 //  Types and Values
 //
 
-/// Constructs a value object from a void pointer and type.
-/// Returns None if the type cannot be converted to a value (eg. if it is void).
-fn value_from_ptr(value_type: Type, content: *mut libc::c_void) -> Option<Value> {
-	unsafe {
-		let result = match value_type {
-			Type::Byte => Some(Value::Byte(*(content as *mut i8))),
-			Type::Short => Some(Value::Short(*(content as *mut i16))),
-			Type::Int => Some(Value::Int(*(content as *mut i32))),
-			Type::Long => Some(Value::Long(*(content as *mut i64))),
-			Type::Float => Some(Value::Float(*(content as *mut libc::c_float) as f32)),
-			Type::Double => Some(Value::Double(*(content as *mut libc::c_double) as f64)),
-			Type::Boolean => Some(Value::Boolean(*(content as *mut i32) == 1)),
-			Type::Char => Some(Value::Char(*(content as *mut u8) as char)),
-			Type::String => Some(Value::String(String::from_raw_buf(content as *const u8))),
-			Type::Void => None,
-		};
-
-		if !content.is_null() {
-			libc::free(content);
-		}
-
-		result
-	}
-}
-
 /// A function argument or return value.
 #[deriving(Show, Clone)]
 pub enum Value {
@@ -137,10 +113,48 @@ pub enum Value {
 	Boolean(bool),
 	Char(char),
 	String(String),
+	Void,
 }
 
 
 impl Value {
+
+	/// Constructs a value object from a void pointer and type.
+	///
+	/// Panics if content is null.
+	fn from_ptr(value_type: Type, content: *mut libc::c_void) -> Value {
+		unsafe {
+			if content.is_null() {
+				panic!("Passing in NULL pointer to Value::from_ptr.");
+			}
+
+			let result = match value_type {
+				Type::Byte =>
+					Value::Byte(*(content as *mut i8)),
+				Type::Short =>
+					Value::Short(*(content as *mut i16)),
+				Type::Int =>
+					Value::Int(*(content as *mut i32)),
+				Type::Long =>
+					Value::Long(*(content as *mut i64)),
+				Type::Float =>
+					Value::Float(*(content as *mut libc::c_float) as f32),
+				Type::Double =>
+					Value::Double(*(content as *mut libc::c_double) as f64),
+				Type::Boolean =>
+					Value::Boolean(*(content as *mut i32) == 1),
+				Type::Char =>
+					Value::Char(*(content as *mut u8) as char),
+				Type::String =>
+					Value::String(String::from_raw_buf(content as *const u8)),
+				Type::Void =>
+					Value::Void,
+			};
+
+			libc::free(content);
+			result
+		}
+	}
 
 	/// Returns the type of this value, dropping the
 	/// value stored in the enum.
@@ -155,22 +169,96 @@ impl Value {
 			Value::Boolean(_) => Type::Boolean,
 			Value::Char(_) => Type::Char,
 			Value::String(_) => Type::String,
+			Value::Void => Type::Void,
 		}
 	}
 
 	/// Returns the number of bytes this value requires when allocated.
 	pub fn bytes(&self) -> u64 {
-		match *self {
-			Value::Byte(_) => mem::size_of::<u8>() as u64,
-			Value::Short(_) => mem::size_of::<u16>() as u64,
-			Value::Int(_) => mem::size_of::<u32>() as u64,
-			Value::Long(_) => mem::size_of::<u64>() as u64,
-			Value::Float(_) => mem::size_of::<f32>() as u64,
-			Value::Double(_) => mem::size_of::<f64>() as u64,
-			Value::Boolean(_) => mem::size_of::<u32>() as u64,
-			Value::Char(_) => mem::size_of::<u8>() as u64,
+		(match *self {
+			Value::Byte(_) => mem::size_of::<i8>(),
+			Value::Short(_) => mem::size_of::<i16>(),
+			Value::Int(_) => mem::size_of::<i32>(),
+			Value::Long(_) => mem::size_of::<i64>(),
+			Value::Float(_) => mem::size_of::<f32>(),
+			Value::Double(_) => mem::size_of::<f64>(),
+			Value::Boolean(_) => mem::size_of::<u32>(),
+			Value::Char(_) => mem::size_of::<u8>(),
 			Value::String(ref string) =>
-				(mem::size_of::<u8>() * (string.as_bytes().len() + 1)) as u64,
+				(mem::size_of::<u8>() * (string.as_bytes().len() + 1)),
+			Value::Void => 0,
+		}) as u64
+	}
+
+	/// Converts the value from a byte to an i8. Panics if the value is not a byte.
+	pub fn to_i8(&self) -> i8 {
+		match *self {
+			Value::Byte(v) => v,
+			_ => panic!("Calling `to_i8` on value {}", self),
+		}
+	}
+
+	/// Converts the value from a short to an i16. Panics if the value is not a short.
+	pub fn to_i16(&self) -> i16 {
+		match *self {
+			Value::Short(v) => v,
+			_ => panic!("Calling `to_i16` on value {}", self),
+		}
+	}
+
+	/// Converts the value from an int to an i32. Panics if the value is not an int.
+	pub fn to_i32(&self) -> i32 {
+		match *self {
+			Value::Int(v) => v,
+			_ => panic!("Calling `to_i32` on value {}", self),
+		}
+	}
+
+	/// Converts the value from a long to an i64. Panics if the value is not a long.
+	pub fn to_i64(&self) -> i64 {
+		match *self {
+			Value::Long(v) => v,
+			_ => panic!("Calling `to_i64` on value {}", self),
+		}
+	}
+
+	/// Converts the value from a float to an f32. Panics if the value is not a float.
+	pub fn to_f32(&self) -> f32 {
+		match *self {
+			Value::Float(v) => v,
+			_ => panic!("Calling `to_f32` on value {}", self),
+		}
+	}
+
+	/// Converts the value from a double to an f64. Panics if the value is not a double.
+	pub fn to_f64(&self) -> f64 {
+		match *self {
+			Value::Double(v) => v,
+			_ => panic!("Calling `to_f64` on value {}", self),
+		}
+	}
+
+	/// Converts the value from a boolean to a bool. Panics if the value is not a boolean.
+	pub fn to_bool(&self) -> bool {
+		match *self {
+			Value::Boolean(v) => v,
+			_ => panic!("Calling `to_bool` on value {}", self),
+		}
+	}
+
+	/// Converts the value to a char. Panics if the value is not a char.
+	pub fn to_char(&self) -> char {
+		match *self {
+			Value::Char(v) => v,
+			_ => panic!("Calling `to_char` on value {}", self),
+		}
+	}
+
+	/// Converts the value to a string. Panics if the value is not a string.
+	pub fn to_string(&self) -> String {
+		match *self {
+			Value::String(ref v) => v.clone(),
+			_ => panic!("Calling `to_string` on value {}", self),
 		}
 	}
 
@@ -178,7 +266,7 @@ impl Value {
 
 
 /// A function argument or return type.
-#[deriving(Show)]
+#[deriving(Show, Clone)]
 pub enum Type {
 	Byte,
 	Short,
@@ -239,6 +327,12 @@ fn arguments_to_void_pointers<T>(arguments: &[Value], callback: |Vec<*mut libc::
 		-> T {
 	let mut values = Vec::new();
 	for value in arguments.iter() {
+		// Protect against passing in void
+		match *value {
+			Value::Void => panic!("Cannot pass `Value::Void` as an argument to a function."),
+			_ => {}
+		}
+
 		let ptr = unsafe {
 			// Allocate heap space for the argument
 			let size = value.bytes();
@@ -266,6 +360,7 @@ fn arguments_to_void_pointers<T>(arguments: &[Value], callback: |Vec<*mut libc::
 						size as uint
 					);
 				},
+				_ => {},
 			}
 
 			ptr
@@ -294,7 +389,7 @@ impl Class {
 	/// Creates a new instance of this class.
 	/// Returns None if the constructor's arguments list is incorrect.
 	/// Create the constructor using `Function::constructor(arguments)`.
-	pub fn instance(&self, constructor_arguments: &[Value]) -> Option<Object> {
+	pub fn instance(&self, constructor_arguments: &[Value]) -> Result<Object, Error> {
 		let mut types = ffi::arguments_to_type_list(constructor_arguments);
 		let signature = signature_for_function(constructor_arguments, Type::Void);
 
@@ -310,9 +405,9 @@ impl Class {
 
 
 				if object_ptr.is_null() {
-					None
+					Err(Error::from_status_code(ffi::error_status()))
 				} else {
-					Some(Object {
+					Ok(Object {
 						java_object: object_ptr,
 					})
 				}
@@ -324,7 +419,7 @@ impl Class {
 	/// Returns None if the method couldn't be found, the function signature
 	/// is incorrect, or the method returns void.
 	pub fn call_static_method(&self, name: &str, arguments: &[Value], return_type: Type)
-			-> Option<Value> {
+			-> Result<Value, Error> {
 		let mut types = ffi::arguments_to_type_list(arguments);
 		let signature = signature_for_function(arguments, return_type);
 
@@ -342,9 +437,14 @@ impl Class {
 				);
 
 				if return_value.is_null() {
-					None
+					let status = ffi::error_status();
+					if status == ffi::ERROR_NONE {
+						Ok(Value::Void)
+					} else {
+						Err(Error::from_status_code(status))
+					}
 				} else {
-					value_from_ptr(return_type, return_value)
+					Ok(Value::from_ptr(return_type, return_value))
 				}
 			}
 		})
@@ -369,7 +469,8 @@ impl Object {
 	/// Calls a method on this object instance.
 	/// Returns None if the method couldn't be found, the signature was incorrect,
 	/// or the function returns void.
-	pub fn call(&self, name: &str, arguments: &[Value], return_type: Type) -> Option<Value> {
+	pub fn call(&self, name: &str, arguments: &[Value], return_type: Type)
+			-> Result<Value, Error> {
 		let mut types = ffi::arguments_to_type_list(arguments);
 		let signature = signature_for_function(arguments, return_type);
 
@@ -387,12 +488,67 @@ impl Object {
 				);
 
 				if return_value.is_null() {
-					None
+					let status = ffi::error_status();
+					if status == ffi::ERROR_NONE {
+						Ok(Value::Void)
+					} else {
+						Err(Error::from_status_code(status))
+					}
 				} else {
-					value_from_ptr(return_type, return_value)
+					Ok(Value::from_ptr(return_type, return_value))
 				}
 			}
 		})
+	}
+
+}
+
+
+
+//
+//  Errors
+//
+
+/// Possible errors that may occur.
+#[deriving(Show)]
+pub enum Error {
+	/// Triggered when the creation of the Java virtual machine
+	/// in the `JavaVM::new` function fails.
+	VirtualMachineCreationFailed,
+
+	/// Triggered if a second Java virtual machine is created.
+	VirtaulMachineAlreadyExists,
+
+	/// Triggered if an error occurred when attempting to allocate
+	/// heap memory.
+	MemoryAllocationFailure,
+
+	/// Triggered when a class could not be found from its name.
+	ClassNotFound,
+
+	/// Triggered when a method could not be found, either because
+	/// the function with the given name doesn't exist, or the
+	/// method signature does not match.
+	MethodNotFound,
+
+	/// Triggered if another internal error occurred.
+	InternalError,
+}
+
+
+impl Error {
+
+	/// Creates an error from a status code.
+	/// Returns None if the code does not match an error.
+	fn from_status_code(code: i32) -> Error {
+		match code {
+			ffi::ERROR_COULD_NOT_CREATE_VM => Error::VirtualMachineCreationFailed,
+			ffi::ERROR_VM_ALREADY_EXISTS => Error::VirtaulMachineAlreadyExists,
+			ffi::ERROR_COULD_NOT_ALLOCATE_MEMORY => Error::MemoryAllocationFailure,
+			ffi::ERROR_CLASS_NOT_FOUND => Error::ClassNotFound,
+			ffi::ERROR_METHOD_NOT_FOUND => Error::MethodNotFound,
+			_ => Error::InternalError,
+		}
 	}
 
 }

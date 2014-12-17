@@ -8,6 +8,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+
+#define SUCCESS 1
+#define FAILURE 0
+
+
 #define TYPE_BYTE		0
 #define TYPE_SHORT	1
 #define TYPE_INT		2
@@ -22,12 +27,13 @@
 
 #define ERROR_NONE				-1
 #define ERROR_COULD_NOT_CREATE_VM		0
-#define ERROR_VM_NOT_CREATED			1
-#define ERROR_COULD_NOT_ALLOCATE_MEMORY	2
-#define ERROR_CLASS_NOT_FOUND			3
-#define ERROR_METHOD_NOT_FOUND		4
-#define ERROR_INVALID_CLASS			5
-#define ERROR_INVALID_OBJECT			6
+#define ERROR_VM_ALREADY_EXISTS		1
+#define ERROR_VM_NOT_CREATED			2
+#define ERROR_COULD_NOT_ALLOCATE_MEMORY	3
+#define ERROR_CLASS_NOT_FOUND			4
+#define ERROR_METHOD_NOT_FOUND		5
+#define ERROR_INVALID_CLASS			6
+#define ERROR_INVALID_OBJECT			7
 
 
 JavaVM *jvm = NULL;
@@ -53,11 +59,13 @@ int create_jvm(char *classpath) {
 		long status = JNI_CreateJavaVM(&jvm, (void **) &env, &vm_args);
 
 		if (status != JNI_OK) {
-			return 0;
+			last_error = ERROR_COULD_NOT_CREATE_VM;
+			return FAILURE;
 		}
+
+		return SUCCESS;
 	}
 
-	return 1;
 }
 
 
@@ -78,13 +86,20 @@ int get_error(void) {
 void * class_from_name(char *name) {
 	last_error = ERROR_NONE;
 
-	jclass java_class = (*env)->FindClass(env, name);
-	if (java_class != NULL) {
-		return (void *) java_class;
+	// Check the VM exists
+	if (jvm == NULL || env == NULL) {
+		last_error = ERROR_VM_NOT_CREATED;
+		return NULL;
 	}
 
-	last_error = ERROR_CLASS_NOT_FOUND;
-	return NULL;
+	// Find the class
+	jclass java_class = (*env)->FindClass(env, name);
+	if (java_class == NULL) {
+		last_error = ERROR_CLASS_NOT_FOUND;
+		return NULL;
+	}
+
+	return (void *) java_class;
 }
 
 
@@ -145,6 +160,12 @@ jvalue * args_to_jni_args(int count, int *types, void **values) {
 void * call_static_method(void *java_class, char *name, char *signature, int return_type,
 		int arg_count, int *arg_types, void **arg_values) {
 	last_error = ERROR_NONE;
+
+	// Check the VM exists
+	if (jvm == NULL || env == NULL) {
+		last_error = ERROR_VM_NOT_CREATED;
+		return NULL;
+	}
 
 	// Validate class
 	jclass cast_class = (jclass) java_class;
@@ -233,6 +254,12 @@ void * create_object(void *java_class, char *signature, int arg_count, int *arg_
 		void **arg_values) {
 	last_error = ERROR_NONE;
 
+	// Check the VM exists
+	if (jvm == NULL || env == NULL) {
+		last_error = ERROR_VM_NOT_CREATED;
+		return NULL;
+	}
+
 	// Validate class
 	jclass cast_class = (jclass) java_class;
 	if (cast_class == NULL) {
@@ -264,6 +291,12 @@ void * create_object(void *java_class, char *signature, int arg_count, int *arg_
 void * call_method(void *java_object, char *name, char *signature, int return_type,
 		int arg_count, int *arg_types, void **arg_values) {
 	last_error = ERROR_NONE;
+
+	// Check the VM exists
+	if (jvm == NULL || env == NULL) {
+		last_error = ERROR_VM_NOT_CREATED;
+		return NULL;
+	}
 
 	// Validate object
 	jobject cast_object = (jobject) java_object;

@@ -6,8 +6,7 @@
 
 extern crate libc;
 
-use Value;
-use Type;
+use {Value, Type};
 
 pub const SUCCESS: i32 = 1;
 
@@ -21,6 +20,13 @@ pub const TYPE_BOOLEAN: i32 = 6;
 pub const TYPE_CHAR: i32 = 7;
 pub const TYPE_STRING: i32 = 8;
 pub const TYPE_VOID: i32 = 9;
+
+pub const ERROR_NONE: i32 = -1;
+pub const ERROR_COULD_NOT_CREATE_VM: i32 = 0;
+pub const ERROR_VM_ALREADY_EXISTS: i32 = 1;
+pub const ERROR_COULD_NOT_ALLOCATE_MEMORY: i32 = 3;
+pub const ERROR_CLASS_NOT_FOUND: i32 = 4;
+pub const ERROR_METHOD_NOT_FOUND: i32 = 5;
 
 
 /// Converts a type to an integer for passing into function call methods.
@@ -36,6 +42,14 @@ pub fn type_to_integer(t: Type) -> i32 {
 		Type::Char => TYPE_CHAR,
 		Type::String => TYPE_STRING,
 		Type::Void => TYPE_VOID,
+	}
+}
+
+
+/// A safe wrapper to fetch the latest error code.
+pub fn error_status() -> i32 {
+	unsafe {
+		get_error() as i32
 	}
 }
 
@@ -57,6 +71,9 @@ extern {
 
 	/// Fetches a class from the given name, returning NULL on failure.
 	pub fn class_from_name(name: *mut libc::c_char) -> *mut libc::c_void;
+
+	/// Fetches the error code from the last function call.
+	pub fn get_error() -> libc::c_int;
 
 	/// Calls a static method on a class.
 	/// Must free the return value!

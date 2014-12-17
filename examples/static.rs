@@ -25,21 +25,32 @@ fn main() {
 	// is a list of paths that will be combined to create the Java
 	// classpath. The classpath is a list of directories the JVM
 	// will look in when trying to locate a .class or .jar file.
-	let jvm = JavaVM::new(&[executable_path])
-		.expect("Failed to create Java virtual machine!");
+	let jvm = JavaVM::new(&[executable_path]).unwrap();
 
 	// Load the `Test` class. The JVM will look for a `Test.class` file in
 	// the classpath to find it.
-	let class = jvm.class("Test")
-		.expect("Couldn't find class `Test`!");
+	let class = jvm.class("Test").unwrap();
 
-	// Call the static method.
+	// Call a static method.
 	// The first argument is the name of the static, the second is an array
 	// containing the arguments to pass into the static, and the third
 	// is the return type of the static.
-	// let value = class.call_static_method("add", &[Value::Int(1), Value::Int(9)], Type::Int);
-	let value = class.call_static_method("append", &[Value::String("hello".to_string())], Type::String);
+	let value1 = class.call_static_method(
+		"add",
+		&[Value::Int(1), Value::Int(9)],
+		Type::Int
+	).unwrap();
 
 	// Print the value that was returned by the static method.
-	println!("{}", value);
+	println!("Result of 1 + 9: {}", value1);
+
+	// Call another static method, this time passing in some strings.
+	let value2 = class.call_static_method(
+		"append",
+		&[Value::String("hello".to_string())],
+		Type::String
+	).unwrap();
+
+	// Print the value.
+	println!("Result of string append function: {}", value2);
 }

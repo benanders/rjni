@@ -25,13 +25,11 @@ fn main() {
 	// is a list of paths that will be combined to create the Java
 	// classpath. The classpath is a list of directories the JVM
 	// will look in when trying to locate a .class or .jar file.
-	let jvm = JavaVM::new(&[executable_path])
-		.expect("Failed to create Java virtual machine!");
+	let jvm = JavaVM::new(&[executable_path]).unwrap();
 
 	// Load the `Test` class. The JVM will look for a `Test.class` file in
 	// the classpath to find it.
-	let class = jvm.class("Test")
-		.expect("Couldn't find class `Test`!");
+	let class = jvm.class("Test").unwrap();
 
 	// Create an instance of the `Test` class. The array of values are the arguments
 	// to be passed to the class' constructor. In this case, the Test class'
@@ -39,14 +37,13 @@ fn main() {
 	//
 	// A none value will be returned if the constructor's arguments are invalid,
 	// a Java error occurred, or any other reason the JNI can come up with.
-	let object = class.instance(&[Value::Int(5)])
-		.expect("Couldn't instantiate class!");
+	let object = class.instance(&[Value::Int(5)]).unwrap();
 
 	// Call the method `incrementCurrent` on the object we just created.
 	// The empty array specifies the arguments to pass into the function,
 	// and the second argument is the return type of the function (in
 	// this case, void).
-	object.call("incrementCurrent", &[], Type::Void);
+	object.call("incrementCurrent", &[], Type::Void).unwrap();
 
 	// Call the `getCurrent` method on the object, and assign its
 	// return value to `value`. In this case, the function takes no
