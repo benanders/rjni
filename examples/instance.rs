@@ -34,9 +34,6 @@ fn main() {
 	// Create an instance of the `Test` class. The array of values are the arguments
 	// to be passed to the class' constructor. In this case, the Test class'
 	// constructor takes a single integer as an argument.
-	//
-	// A none value will be returned if the constructor's arguments are invalid,
-	// a Java error occurred, or any other reason the JNI can come up with.
 	let object = class.instance(&[Value::Int(5)]).unwrap();
 
 	// Call the method `incrementCurrent` on the object we just created.

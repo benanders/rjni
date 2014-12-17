@@ -42,8 +42,6 @@ impl JavaVM {
 
 	/// Creates a new Java virtual machine using the given list
 	/// of directories as the classpath.
-	///
-	/// Returns None when the JVM failed to be created.
 	pub fn new(classpath_directories: &[Path]) -> Result<JavaVM, Error> {
 		let mut classpath = String::new();
 		for dir in classpath_directories.iter() {
@@ -66,7 +64,6 @@ impl JavaVM {
 	/// Creates a class from the given class name.
 	///
 	/// Note this doesn't instantiate an instance of this class.
-	/// Returns None if the class couldn't be found.
 	pub fn class(&self, name: &str) -> Result<Class, Error> {
 		let ptr = unsafe {
 			ffi::class_from_name(name.to_c_str().as_mut_ptr())
@@ -387,8 +384,6 @@ pub struct Class {
 impl Class {
 
 	/// Creates a new instance of this class.
-	/// Returns None if the constructor's arguments list is incorrect.
-	/// Create the constructor using `Function::constructor(arguments)`.
 	pub fn instance(&self, constructor_arguments: &[Value]) -> Result<Object, Error> {
 		let mut types = ffi::arguments_to_type_list(constructor_arguments);
 		let signature = signature_for_function(constructor_arguments, Type::Void);
@@ -416,8 +411,6 @@ impl Class {
 	}
 
 	/// Calls a static method on this class.
-	/// Returns None if the method couldn't be found, the function signature
-	/// is incorrect, or the method returns void.
 	pub fn call_static_method(&self, name: &str, arguments: &[Value], return_type: Type)
 			-> Result<Value, Error> {
 		let mut types = ffi::arguments_to_type_list(arguments);
@@ -467,8 +460,6 @@ pub struct Object {
 impl Object {
 
 	/// Calls a method on this object instance.
-	/// Returns None if the method couldn't be found, the signature was incorrect,
-	/// or the function returns void.
 	pub fn call(&self, name: &str, arguments: &[Value], return_type: Type)
 			-> Result<Value, Error> {
 		let mut types = ffi::arguments_to_type_list(arguments);
@@ -539,7 +530,6 @@ pub enum Error {
 impl Error {
 
 	/// Creates an error from a status code.
-	/// Returns None if the code does not match an error.
 	fn from_status_code(code: i32) -> Error {
 		match code {
 			ffi::ERROR_COULD_NOT_CREATE_VM => Error::VirtualMachineCreationFailed,
