@@ -5,12 +5,26 @@
 //
 
 
+#![feature(macro_rules)]
+
+
 extern crate libc;
 
 use std::mem;
 use std::ptr;
 
 mod ffi;
+
+
+macro_rules! copy_into_ptr(
+	($variable:expr, $ptr:expr, $size:expr) => (
+		ptr::copy_memory(
+			$ptr,
+			&($variable) as *const _ as *const libc::c_void,
+			($size) as uint
+		);
+	)
+)
 
 
 
@@ -103,7 +117,10 @@ fn value_from_ptr(value_type: Type, content: *mut libc::c_void) -> Option<Value>
 			Type::Void => None,
 		};
 
-		libc::free(content);
+		if !content.is_null() {
+			libc::free(content);
+		}
+
 		result
 	}
 }
@@ -228,24 +245,28 @@ fn arguments_to_void_pointers<T>(arguments: &[Value], callback: |Vec<*mut libc::
 			let ptr = libc::malloc(size);
 
 			// Convert to a void pointer
-			let copy_ptr = match *value {
-				Value::Byte(v) => &v as *const _ as *const libc::c_void,
-				Value::Short(v) => &v as *const _ as *const libc::c_void,
-				Value::Int(v) => &v as *const _ as *const libc::c_void,
-				Value::Long(v) => &v as *const _ as *const libc::c_void,
-				Value::Float(v) => &v as *const _ as *const libc::c_void,
-				Value::Double(v) => &v as *const _ as *const libc::c_void,
+			match *value {
+				Value::Byte(v) => copy_into_ptr!(v, ptr, size),
+				Value::Short(v) => copy_into_ptr!(v, ptr, size),
+				Value::Int(v) => copy_into_ptr!(v, ptr, size),
+				Value::Long(v) => copy_into_ptr!(v, ptr, size),
+				Value::Float(v) => copy_into_ptr!(v, ptr, size),
+				Value::Double(v) => copy_into_ptr!(v, ptr, size),
+				Value::Char(v) => copy_into_ptr!(v, ptr, size),
 				Value::Boolean(v) => {
 					let as_int: i32 = if v { 1 } else { 0 };
-					&as_int as *const _ as *const libc::c_void
+					copy_into_ptr!(as_int, ptr, size)
 				},
-				Value::Char(v) => &v as *const _ as *const libc::c_void,
-				Value::String(ref v) =>
-					&v.to_c_str().as_mut_ptr() as *const _ as *const libc::c_void,
-			};
-
-			// Copy the pointer value across
-			ptr::copy_memory(ptr, copy_ptr, size as uint);
+				Value::String(ref v) => {
+					let string = v.to_c_str();
+					let str_ptr = string.as_ptr();
+					ptr::copy_memory(
+						ptr,
+						str_ptr as *const libc::c_void,
+						size as uint
+					);
+				},
+			}
 
 			ptr
 		};

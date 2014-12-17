@@ -20,4 +20,8 @@ public class Test {
 		return a + b;
 	}
 
+	public static String append(String input) {
+		return input + " there from java";
+	}
+
 }

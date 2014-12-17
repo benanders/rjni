@@ -20,8 +20,19 @@
 #define TYPE_VOID		9
 
 
+#define ERROR_NONE				-1
+#define ERROR_COULD_NOT_CREATE_VM		0
+#define ERROR_VM_NOT_CREATED			1
+#define ERROR_COULD_NOT_ALLOCATE_MEMORY	2
+#define ERROR_CLASS_NOT_FOUND			3
+#define ERROR_METHOD_NOT_FOUND		4
+#define ERROR_INVALID_CLASS			5
+#define ERROR_INVALID_OBJECT			6
+
+
 JavaVM *jvm = NULL;
 JNIEnv *env = NULL;
+int last_error = ERROR_NONE;
 
 
 /// Creates the Java virtual machine.
@@ -56,19 +67,29 @@ void destroy_jvm(void) {
 }
 
 
+/// Returns the error code for the latest function called.
+int get_error(void) {
+	return last_error;
+}
+
+
 /// Returns the class from the class name.
 /// Returns NULL on failure.
 void * class_from_name(char *name) {
+	last_error = ERROR_NONE;
+
 	jclass java_class = (*env)->FindClass(env, name);
 	if (java_class != NULL) {
 		return (void *) java_class;
 	}
 
+	last_error = ERROR_CLASS_NOT_FOUND;
 	return NULL;
 }
 
 
 /// Converts a void pointer and type into a JNI value.
+/// PRIVATE
 jvalue value_to_jni_value(int type, void *content) {
 	jvalue result;
 
@@ -98,6 +119,7 @@ jvalue value_to_jni_value(int type, void *content) {
 
 /// Convert a list of arguments into an array of JNI values.
 /// Note: Return value must be freed!
+/// PRIVATE
 jvalue * args_to_jni_args(int count, int *types, void **values) {
 	jvalue *args = malloc(sizeof(jvalue) * count);
 	if (args == NULL) {
@@ -122,20 +144,25 @@ jvalue * args_to_jni_args(int count, int *types, void **values) {
 /// Returns NULL on failure.
 void * call_static_method(void *java_class, char *name, char *signature, int return_type,
 		int arg_count, int *arg_types, void **arg_values) {
+	last_error = ERROR_NONE;
+
 	// Validate class
 	jclass cast_class = (jclass) java_class;
 	if (cast_class == NULL) {
+		last_error = ERROR_INVALID_CLASS;
 		return NULL;
 	}
 
 	// Get method ID
 	jmethodID method_id = (*env)->GetStaticMethodID(env, cast_class, name, signature);
 	if (method_id == NULL) {
+		last_error = ERROR_METHOD_NOT_FOUND;
 		return NULL;
 	}
 
 	jvalue *args = args_to_jni_args(arg_count, arg_types, arg_values);
 	if (args == NULL) {
+		last_error = ERROR_COULD_NOT_ALLOCATE_MEMORY;
 		return NULL;
 	}
 
@@ -143,6 +170,7 @@ void * call_static_method(void *java_class, char *name, char *signature, int ret
 	if (return_type != TYPE_VOID && return_type != TYPE_STRING) {
 		result = malloc(sizeof(jvalue));
 		if (result == NULL) {
+			last_error = ERROR_COULD_NOT_ALLOCATE_MEMORY;
 			return NULL;
 		}
 
@@ -181,6 +209,11 @@ void * call_static_method(void *java_class, char *name, char *signature, int ret
 
 		// Get the string and copy it into the results buffer
 		const char *str = (*env)->GetStringUTFChars(env, value, NULL);
+		if (str == NULL) {
+			last_error = ERROR_COULD_NOT_ALLOCATE_MEMORY;
+			return NULL;
+		}
+
 		memcpy(result, str, size + 1);
 
 		// Free the Java string
@@ -198,20 +231,25 @@ void * call_static_method(void *java_class, char *name, char *signature, int ret
 /// The arguments relate to the arguments passed to the constructor.
 void * create_object(void *java_class, char *signature, int arg_count, int *arg_types,
 		void **arg_values) {
+	last_error = ERROR_NONE;
+
 	// Validate class
 	jclass cast_class = (jclass) java_class;
 	if (cast_class == NULL) {
+		last_error = ERROR_INVALID_CLASS;
 		return NULL;
 	}
 
 	// Get constructor method ID
 	jmethodID constructor_id = (*env)->GetMethodID(env, cast_class, "<init>", signature);
 	if (constructor_id == NULL) {
+		last_error = ERROR_METHOD_NOT_FOUND;
 		return NULL;
 	}
 
 	jvalue *args = args_to_jni_args(arg_count, arg_types, arg_values);
 	if (args == NULL) {
+		last_error = ERROR_COULD_NOT_ALLOCATE_MEMORY;
 		return NULL;
 	}
 
@@ -225,56 +263,87 @@ void * create_object(void *java_class, char *signature, int arg_count, int *arg_
 /// Calls a method on a class.
 void * call_method(void *java_object, char *name, char *signature, int return_type,
 		int arg_count, int *arg_types, void **arg_values) {
+	last_error = ERROR_NONE;
+
 	// Validate object
 	jobject cast_object = (jobject) java_object;
 	if (cast_object == NULL) {
+		last_error = ERROR_INVALID_OBJECT;
 		return NULL;
 	}
 
 	// Get class
 	jclass object_class = (*env)->GetObjectClass(env, cast_object);
 	if (object_class == NULL) {
+		last_error = ERROR_INVALID_CLASS;
 		return NULL;
 	}
 
 	// Get method ID
 	jmethodID method_id = (*env)->GetMethodID(env, object_class, name, signature);
 	if (method_id == NULL) {
+		last_error = ERROR_METHOD_NOT_FOUND;
 		return NULL;
 	}
 
 	jvalue *args = args_to_jni_args(arg_count, arg_types, arg_values);
 	if (args == NULL) {
+		last_error = ERROR_COULD_NOT_ALLOCATE_MEMORY;
 		return NULL;
 	}
 
-	jvalue *result = NULL;
+	void *result = NULL;
 	if (return_type != TYPE_VOID) {
 		result = malloc(sizeof(jvalue));
 		if (result == NULL) {
+			last_error = ERROR_COULD_NOT_ALLOCATE_MEMORY;
 			return NULL;
 		}
 
 		// Call the method
 		if (return_type == TYPE_BYTE) {
-			result->b = (*env)->CallByteMethodA(env, cast_object, method_id, args);
+			((jvalue *)result)->b =
+				(*env)->CallByteMethodA(env, cast_object, method_id, args);
 		} else if (return_type == TYPE_SHORT) {
-			result->s = (*env)->CallShortMethodA(env, cast_object, method_id, args);
+			((jvalue *)result)->s =
+				(*env)->CallShortMethodA(env, cast_object, method_id, args);
 		} else if (return_type == TYPE_INT) {
-			result->i = (*env)->CallIntMethodA(env, cast_object, method_id, args);
+			((jvalue *)result)->i =
+				(*env)->CallIntMethodA(env, cast_object, method_id, args);
 		} else if (return_type == TYPE_LONG) {
-			result->j = (*env)->CallLongMethodA(env, cast_object, method_id, args);
+			((jvalue *)result)->j =
+				(*env)->CallLongMethodA(env, cast_object, method_id, args);
 		} else if (return_type == TYPE_FLOAT) {
-			result->f = (*env)->CallFloatMethodA(env, cast_object, method_id, args);
+			((jvalue *)result)->f =
+				(*env)->CallFloatMethodA(env, cast_object, method_id, args);
 		} else if (return_type == TYPE_DOUBLE) {
-			result->d = (*env)->CallDoubleMethodA(env, cast_object, method_id, args);
+			((jvalue *)result)->d =
+				(*env)->CallDoubleMethodA(env, cast_object, method_id, args);
 		} else if (return_type == TYPE_BOOLEAN) {
-			result->z = (*env)->CallBooleanMethodA(env, cast_object, method_id, args);
+			((jvalue *)result)->z =
+				(*env)->CallBooleanMethodA(env, cast_object, method_id, args);
 		} else if (return_type == TYPE_CHAR) {
-			result->c = (*env)->CallCharMethodA(env, cast_object, method_id, args);
-		} else if (return_type == TYPE_STRING) {
-			result->l = (*env)->CallObjectMethodA(env, cast_object, method_id, args);
+			((jvalue *)result)->c =
+				(*env)->CallCharMethodA(env, cast_object, method_id, args);
 		}
+	} else if (return_type == TYPE_STRING) {
+		jstring value = (*env)->CallObjectMethodA(env, cast_object, method_id, args);
+
+		// Allocate the results buffer
+		int size = (*env)->GetStringUTFLength(env, value);
+		result = malloc(sizeof(char) * (size + 1));
+
+		// Get the string and copy it into the results buffer
+		const char *str = (*env)->GetStringUTFChars(env, value, NULL);
+		if (str == NULL) {
+			last_error = ERROR_COULD_NOT_ALLOCATE_MEMORY;
+			return NULL;
+		}
+
+		memcpy(result, str, size + 1);
+
+		// Free the Java string
+		(*env)->ReleaseStringUTFChars(env, value, str);
 	} else {
 		(*env)->CallVoidMethodA(env, cast_object, method_id, args);
 	}
