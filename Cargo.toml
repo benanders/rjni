@@ -1,6 +1,6 @@
 [package]
 
-name = "jnirs"
+name = "jni"
 version = "0.0.1"
 authors = ["Ben Anderson <gravityscore@gmail.com>"]
 build = "build.rs"
