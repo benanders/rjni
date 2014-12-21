@@ -66,12 +66,15 @@ int create_jvm(char *classpath) {
 		return SUCCESS;
 	}
 
+	return FAILURE;
 }
 
 
 /// Destroys the Java VM once its finished being used.
 void destroy_jvm(void) {
-	(*jvm)->DestroyJavaVM(jvm);
+	if (jvm != NULL) {
+		(*jvm)->DestroyJavaVM(jvm);
+	}
 }
 
 
