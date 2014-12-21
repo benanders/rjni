@@ -329,7 +329,7 @@ void * call_method(void *java_object, char *name, char *signature, int return_ty
 	}
 
 	void *result = NULL;
-	if (return_type != TYPE_VOID) {
+	if (return_type != TYPE_VOID && return_type != TYPE_STRING) {
 		result = malloc(sizeof(jvalue));
 		if (result == NULL) {
 			last_error = ERROR_COULD_NOT_ALLOCATE_MEMORY;
