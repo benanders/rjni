@@ -59,7 +59,9 @@ impl JavaVM {
 		if success != ffi::SUCCESS {
 			Err(Error::from_status_code(ffi::error_status()))
 		} else {
-			Ok(JavaVM)
+			Ok(JavaVM {
+				should_call_destructor: true,
+			})
 		}
 	}
 
@@ -76,7 +78,6 @@ impl JavaVM {
 		} else {
 			Ok(Class {
 				java_class: ptr,
-				should_call_destructor: true,
 			})
 		}
 	}
@@ -93,7 +94,7 @@ impl JavaVM {
 impl Drop for JavaVM {
 
 	fn drop(&mut self) {
-		if (self.should_call_destructor) {
+		if self.should_call_destructor {
 			// Destroy the JVM on drop
 			unsafe {
 				ffi::destroy_jvm();
