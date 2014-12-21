@@ -35,7 +35,9 @@ macro_rules! copy_into_ptr(
 
 /// An instance of a Java virtual machine.
 /// JNI does not allow multiple VMs to be created.
-pub struct JavaVM;
+pub struct JavaVM {
+	should_call_destructor: bool,
+}
 
 
 impl JavaVM {
@@ -74,8 +76,15 @@ impl JavaVM {
 		} else {
 			Ok(Class {
 				java_class: ptr,
+				should_call_destructor: true,
 			})
 		}
+	}
+
+	/// Sets whether the Java virtual machine will be explicitly destroyed
+	/// when the JavaVM is dropped.
+	pub fn set_calls_destructor(&mut self, should: bool) {
+		self.should_call_destructor = should;
 	}
 
 }
@@ -84,9 +93,11 @@ impl JavaVM {
 impl Drop for JavaVM {
 
 	fn drop(&mut self) {
-		// Destroy the JVM on drop
-		unsafe {
-			ffi::destroy_jvm();
+		if (self.should_call_destructor) {
+			// Destroy the JVM on drop
+			unsafe {
+				ffi::destroy_jvm();
+			}
 		}
 	}
 
