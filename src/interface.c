@@ -45,16 +45,18 @@ int last_error = ERROR_NONE;
 /// Returns 1 on success and 0 on failure.
 int create_jvm(char *classpath) {
 	if (jvm == NULL) {
-		JavaVMOption options[1];
+		JavaVMOption options[3];
 		JavaVMInitArgs vm_args;
 
 		char destination[200];
 		strcpy(destination, "-Djava.class.path=");
 		strcat(destination, classpath);
 		options[0].optionString = destination;
+		options[1].optionString = "-Xms256m";
+		options[2].optionString = "-Xmx1024m";
 
 		vm_args.version = JNI_VERSION_1_2;
-		vm_args.nOptions = 1;
+		vm_args.nOptions = 3;
 		vm_args.options = options;
 		long status = JNI_CreateJavaVM(&jvm, (void **) &env, &vm_args);
 
