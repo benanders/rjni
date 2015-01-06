@@ -12,6 +12,7 @@ extern crate libc;
 
 use std::mem;
 use std::ptr;
+use std::c_str::ToCStr;
 
 mod ffi;
 
@@ -111,7 +112,7 @@ impl Drop for JavaVM {
 //
 
 /// A function argument or return value.
-#[deriving(Show, Clone)]
+#[derive(Show, Clone)]
 pub enum Value {
 	Byte(i8),
 	Short(i16),
@@ -275,7 +276,7 @@ impl Value {
 
 
 /// A function argument or return type.
-#[deriving(Show, Clone, Copy)]
+#[derive(Show, Clone, Copy)]
 pub enum Type {
 	Byte,
 	Short,
@@ -388,7 +389,7 @@ fn arguments_to_void_pointers<T>(arguments: &[Value], callback: |Vec<*mut libc::
 //
 
 /// A Java class (not an instance of a class).
-#[deriving(Show, Copy)]
+#[derive(Show, Copy)]
 pub struct Class {
 	java_class: *mut libc::c_void,
 }
@@ -465,7 +466,7 @@ impl Class {
 //
 
 /// An instance of a Java class.
-#[deriving(Show, Copy)]
+#[derive(Show, Copy)]
 pub struct Object {
 	java_object: *mut libc::c_void,
 }
@@ -515,7 +516,7 @@ impl Object {
 //
 
 /// Possible errors that may occur.
-#[deriving(Show, Copy)]
+#[derive(Show, Copy)]
 pub enum Error {
 	/// Triggered when the creation of the Java virtual machine
 	/// in the `JavaVM::new` function fails.
