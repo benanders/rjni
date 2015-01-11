@@ -8,7 +8,7 @@ I've only tested this on OSX, and you'll almost certainly get a linking error on
 
 ### Examples
 
-_Calling a static method:_
+**Calling a static method:**
 
 ```java
 // Test.java
@@ -45,11 +45,11 @@ fn main() {
 	let value = class.call_static_method("add", &[Value::Int(1), Value::Int(9)], Type::Int).unwrap();
 
 	// Print the value that was returned by the static method.
-	println!("Result of 1 + 9: {}", value);
+	println!("Result of 1 + 9: {:?}", value);
 }
 ```
 
-_Instantiating an object and calling a method:_
+**Instantiating an object and calling a method:**
 
 ```java
 // Test.java
@@ -107,7 +107,7 @@ fn main() {
 	let value = object.call("getCurrent", &[], Type::Int).unwrap();
 
 	// Print the value we just fetched from the object.
-	println!("{}", value);
+	println!("{:?}", value);
 }
 ```
 
