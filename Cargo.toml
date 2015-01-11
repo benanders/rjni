@@ -5,8 +5,5 @@ version = "0.0.1"
 authors = ["Ben Anderson <gravityscore@gmail.com>"]
 build = "build.rs"
 
-[lib]
-name = "jni"
-
-[build-dependencies.gcc]
-git = "https://github.com/alexcrichton/gcc-rs"
+[build-dependencies]
+gcc = "*"
