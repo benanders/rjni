@@ -64,13 +64,13 @@ pub fn arguments_to_type_list(arguments: &[Value]) -> Vec<i32> {
 #[link(name = "JavaVM", kind = "framework")]
 extern {
 	/// Creates the Java virtual machine instance.
-	pub fn create_jvm(classpath: *mut libc::c_char) -> libc::c_int;
+	pub fn create_jvm(classpath: *const libc::c_char) -> libc::c_int;
 
 	/// Destroys the Java virtual machine instance.
 	pub fn destroy_jvm();
 
 	/// Fetches a class from the given name, returning NULL on failure.
-	pub fn class_from_name(name: *mut libc::c_char) -> *mut libc::c_void;
+	pub fn class_from_name(name: *const libc::c_char) -> *mut libc::c_void;
 
 	/// Fetches the error code from the last function call.
 	pub fn get_error() -> libc::c_int;
@@ -79,8 +79,8 @@ extern {
 	/// Must free the return value!
 	pub fn call_static_method(
 		java_class: *mut libc::c_void,
-		method_name: *mut libc::c_char,
-		method_signature: *mut libc::c_char,
+		method_name: *const libc::c_char,
+		method_signature: *const libc::c_char,
 		return_type: libc::c_int,
 		argument_count: libc::c_int,
 		argument_types: *mut libc::c_int,
@@ -90,7 +90,7 @@ extern {
 	/// Creates an instance of a new class.
 	pub fn create_object(
 		java_class: *mut libc::c_void,
-		constructor_signature: *mut libc::c_char,
+		constructor_signature: *const libc::c_char,
 		argument_count: libc::c_int,
 		argument_types: *mut libc::c_int,
 		argument_values: *mut *mut libc::c_void,
@@ -100,8 +100,8 @@ extern {
 	/// Must free the return value!
 	pub fn call_method(
 		java_object: *mut libc::c_void,
-		method_name: *mut libc::c_char,
-		method_signature: *mut libc::c_char,
+		method_name: *const libc::c_char,
+		method_signature: *const libc::c_char,
 		return_type: libc::c_int,
 		argument_count: libc::c_int,
 		argument_types: *mut libc::c_int,

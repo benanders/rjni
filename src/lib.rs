@@ -5,14 +5,12 @@
 //
 
 
-#![feature(macro_rules)]
-
-
 extern crate libc;
 
 use std::mem;
 use std::ptr;
-use std::c_str::ToCStr;
+use std::str;
+use std::ffi::CString;
 
 mod ffi;
 
@@ -23,7 +21,7 @@ macro_rules! copy_into_ptr(
 		ptr::copy_memory(
 			$ptr,
 			&($variable) as *const _ as *const libc::c_void,
-			($size) as uint
+			($size) as usize
 		);
 	)
 );
@@ -54,7 +52,8 @@ impl JavaVM {
 		}
 
 		let success = unsafe {
-			ffi::create_jvm(classpath.as_slice().to_c_str().as_mut_ptr())
+			let cstr = CString::from_slice(classpath.as_bytes());
+			ffi::create_jvm(cstr.as_ptr())
 		};
 
 		if success != ffi::SUCCESS {
@@ -71,7 +70,8 @@ impl JavaVM {
 	/// Note this doesn't instantiate an instance of this class.
 	pub fn class(&self, name: &str) -> Result<Class, Error> {
 		let ptr = unsafe {
-			ffi::class_from_name(name.to_c_str().as_mut_ptr())
+			let cstr = CString::from_slice(name.as_bytes());
+			ffi::class_from_name(cstr.as_ptr())
 		};
 
 		if ptr.is_null() {
@@ -155,8 +155,11 @@ impl Value {
 					Value::Boolean(*(content as *mut i32) == 1),
 				Type::Char =>
 					Value::Char(*(content as *mut u8) as char),
-				Type::String =>
-					Value::String(String::from_raw_buf(content as *const u8)),
+				Type::String => {
+					let str_ptr = content as *const libc::c_char;
+					let bytes = std::ffi::c_str_to_bytes(&str_ptr);
+					Value::String(str::from_utf8(bytes).unwrap().to_string())
+				},
 				Type::Void =>
 					Value::Void,
 			};
@@ -204,7 +207,7 @@ impl Value {
 	pub fn to_i8(&self) -> i8 {
 		match *self {
 			Value::Byte(v) => v,
-			_ => panic!("Calling `to_i8` on value {}", self),
+			_ => panic!("Calling `to_i8` on value"),
 		}
 	}
 
@@ -212,7 +215,7 @@ impl Value {
 	pub fn to_i16(&self) -> i16 {
 		match *self {
 			Value::Short(v) => v,
-			_ => panic!("Calling `to_i16` on value {}", self),
+			_ => panic!("Calling `to_i16` on value"),
 		}
 	}
 
@@ -220,7 +223,7 @@ impl Value {
 	pub fn to_i32(&self) -> i32 {
 		match *self {
 			Value::Int(v) => v,
-			_ => panic!("Calling `to_i32` on value {}", self),
+			_ => panic!("Calling `to_i32` on value"),
 		}
 	}
 
@@ -228,7 +231,7 @@ impl Value {
 	pub fn to_i64(&self) -> i64 {
 		match *self {
 			Value::Long(v) => v,
-			_ => panic!("Calling `to_i64` on value {}", self),
+			_ => panic!("Calling `to_i64` on value"),
 		}
 	}
 
@@ -236,7 +239,7 @@ impl Value {
 	pub fn to_f32(&self) -> f32 {
 		match *self {
 			Value::Float(v) => v,
-			_ => panic!("Calling `to_f32` on value {}", self),
+			_ => panic!("Calling `to_f32` on value"),
 		}
 	}
 
@@ -244,7 +247,7 @@ impl Value {
 	pub fn to_f64(&self) -> f64 {
 		match *self {
 			Value::Double(v) => v,
-			_ => panic!("Calling `to_f64` on value {}", self),
+			_ => panic!("Calling `to_f64` on value"),
 		}
 	}
 
@@ -252,7 +255,7 @@ impl Value {
 	pub fn to_bool(&self) -> bool {
 		match *self {
 			Value::Boolean(v) => v,
-			_ => panic!("Calling `to_bool` on value {}", self),
+			_ => panic!("Calling `to_bool` on value"),
 		}
 	}
 
@@ -260,7 +263,7 @@ impl Value {
 	pub fn to_char(&self) -> char {
 		match *self {
 			Value::Char(v) => v,
-			_ => panic!("Calling `to_char` on value {}", self),
+			_ => panic!("Calling `to_char` on value"),
 		}
 	}
 
@@ -268,7 +271,7 @@ impl Value {
 	pub fn to_string(&self) -> String {
 		match *self {
 			Value::String(ref v) => v.clone(),
-			_ => panic!("Calling `to_string` on value {}", self),
+			_ => panic!("Calling `to_string` on value"),
 		}
 	}
 
@@ -333,8 +336,8 @@ fn signature_for_function(arguments: &[Value], return_type: Type) -> String {
 
 
 /// Converts each value in the arguments array into a void pointer.
-fn arguments_to_void_pointers<T>(arguments: &[Value], callback: |Vec<*mut libc::c_void>| -> T)
-		-> T {
+fn arguments_to_void_pointers<T, F>(arguments: &[Value], callback: F) -> T
+		where F: Fn(Vec<*mut libc::c_void>) -> T {
 	let mut values = Vec::new();
 	for value in arguments.iter() {
 		// Protect against passing in void
@@ -362,12 +365,12 @@ fn arguments_to_void_pointers<T>(arguments: &[Value], callback: |Vec<*mut libc::
 					copy_into_ptr!(as_int, ptr, size)
 				},
 				Value::String(ref v) => {
-					let string = v.to_c_str();
+					let string = CString::from_slice(v.as_bytes());
 					let str_ptr = string.as_ptr();
 					ptr::copy_memory(
 						ptr,
 						str_ptr as *const libc::c_void,
-						size as uint
+						size as usize
 					);
 				},
 				_ => {},
@@ -399,14 +402,15 @@ impl Class {
 
 	/// Creates a new instance of this class.
 	pub fn instance(&self, constructor_arguments: &[Value]) -> Result<Object, Error> {
-		let mut types = ffi::arguments_to_type_list(constructor_arguments);
 		let signature = signature_for_function(constructor_arguments, Type::Void);
 
 		arguments_to_void_pointers(constructor_arguments, |mut values| {
+			let mut types = ffi::arguments_to_type_list(constructor_arguments);
 			unsafe {
+				let signature_cstr = CString::from_slice(signature.as_bytes());
 				let object_ptr = ffi::create_object(
 					self.java_class,
-					signature.to_c_str().as_mut_ptr(),
+					signature_cstr.as_ptr(),
 					constructor_arguments.len() as i32,
 					types.as_mut_slice().as_mut_ptr(),
 					values.as_mut_slice().as_mut_ptr(),
@@ -427,16 +431,18 @@ impl Class {
 	/// Calls a static method on this class.
 	pub fn call_static_method(&self, name: &str, arguments: &[Value], return_type: Type)
 			-> Result<Value, Error> {
-		let mut types = ffi::arguments_to_type_list(arguments);
 		let signature = signature_for_function(arguments, return_type);
 
 		arguments_to_void_pointers(arguments, |mut values| {
+			let mut types = ffi::arguments_to_type_list(arguments);
 			unsafe {
 				// Call the static method
+				let name_cstr = CString::from_slice(name.as_bytes());
+				let signature_cstr = CString::from_slice(signature.as_bytes());
 				let return_value = ffi::call_static_method(
 					self.java_class,
-					name.to_c_str().as_mut_ptr(),
-					signature.as_slice().to_c_str().as_mut_ptr(),
+					name_cstr.as_ptr(),
+					signature_cstr.as_ptr(),
 					ffi::type_to_integer(return_type),
 					arguments.len() as i32,
 					types.as_mut_slice().as_mut_ptr(),
@@ -477,16 +483,19 @@ impl Object {
 	/// Calls a method on this object instance.
 	pub fn call(&self, name: &str, arguments: &[Value], return_type: Type)
 			-> Result<Value, Error> {
-		let mut types = ffi::arguments_to_type_list(arguments);
 		let signature = signature_for_function(arguments, return_type);
 
 		arguments_to_void_pointers(arguments, |mut values| {
+			let mut types = ffi::arguments_to_type_list(arguments);
 			unsafe {
+
 				// Call the static method
+				let name_cstr = CString::from_slice(name.as_bytes());
+				let signature_cstr = CString::from_slice(signature.as_bytes());
 				let return_value = ffi::call_method(
 					self.java_object,
-					name.to_c_str().as_mut_ptr(),
-					signature.as_slice().to_c_str().as_mut_ptr(),
+					name_cstr.as_ptr(),
+					signature_cstr.as_ptr(),
 					ffi::type_to_integer(return_type),
 					arguments.len() as i32,
 					types.as_mut_slice().as_mut_ptr(),

@@ -42,7 +42,7 @@ fn main() {
 	).unwrap();
 
 	// Print the value that was returned by the static method.
-	println!("Result of 1 + 9: {}", value1);
+	println!("Result of 1 + 9: {:?}", value1);
 
 	// Call another static method, this time passing in some strings.
 	let value2 = class.call_static_method(
@@ -52,5 +52,5 @@ fn main() {
 	).unwrap();
 
 	// Print the value.
-	println!("Result of string append function: {}", value2);
+	println!("Result of string append function: {:?}", value2);
 }

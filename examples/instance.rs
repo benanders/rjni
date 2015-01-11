@@ -48,5 +48,5 @@ fn main() {
 	let value = object.call("getCurrent", &[], Type::Int).unwrap();
 
 	// Print the value we just fetched from the object.
-	println!("{}", value);
+	println!("{:?}", value);
 }
