@@ -5,12 +5,16 @@
 //
 
 
+#![feature(libc, convert)]
+
 extern crate libc;
 
 use std::mem;
 use std::ptr;
 use std::str;
-use std::ffi::CString;
+use std::ffi::{CString, CStr};
+
+use std::path::PathBuf;
 
 mod ffi;
 
@@ -18,9 +22,9 @@ mod ffi;
 /// Convert a variable into a pointer and copy it into `ptr`.
 macro_rules! copy_into_ptr(
 	($variable:expr, $ptr:expr, $size:expr) => (
-		ptr::copy_memory(
+		ptr::copy(
 			$ptr,
-			&($variable) as *const _ as *const libc::c_void,
+			&($variable) as *const _ as *mut libc::c_void,
 			($size) as usize
 		);
 	)
@@ -43,16 +47,16 @@ impl JavaVM {
 
 	/// Creates a new Java virtual machine using the given list
 	/// of directories as the classpath.
-	pub fn new(classpath_directories: &[Path]) -> Result<JavaVM, Error> {
+	pub fn new(classpath_directories: &[PathBuf]) -> Result<JavaVM, Error> {
 		let mut classpath = String::new();
-		for dir in classpath_directories.iter() {
-			let string = dir.as_str().expect("Path could not be converted into a string");
+		for dir in classpath_directories {
+			let string = dir.to_str().expect("Path could not be converted into a string");
 			classpath.push_str(string);
 			classpath.push(':');
 		}
 
 		let success = unsafe {
-			let cstr = CString::from_slice(classpath.as_bytes());
+			let cstr = CString::new(classpath.as_bytes()).unwrap();
 			ffi::create_jvm(cstr.as_ptr())
 		};
 
@@ -70,7 +74,7 @@ impl JavaVM {
 	/// Note this doesn't instantiate an instance of this class.
 	pub fn class(&self, name: &str) -> Result<Class, Error> {
 		let ptr = unsafe {
-			let cstr = CString::from_slice(name.as_bytes());
+			let cstr = CString::new(name.as_bytes()).unwrap();
 			ffi::class_from_name(cstr.as_ptr())
 		};
 
@@ -112,7 +116,7 @@ impl Drop for JavaVM {
 //
 
 /// A function argument or return value.
-#[derive(Show, Clone)]
+#[derive(Debug, Clone)]
 pub enum Value {
 	Byte(i8),
 	Short(i16),
@@ -156,8 +160,8 @@ impl Value {
 				Type::Char =>
 					Value::Char(*(content as *mut u8) as char),
 				Type::String => {
-					let str_ptr = content as *const libc::c_char;
-					let bytes = std::ffi::c_str_to_bytes(&str_ptr);
+					let ptr = CStr::from_ptr(content as *const libc::c_char);
+					let bytes = ptr.to_bytes();
 					Value::String(str::from_utf8(bytes).unwrap().to_string())
 				},
 				Type::Void =>
@@ -279,7 +283,7 @@ impl Value {
 
 
 /// A function argument or return type.
-#[derive(Show, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum Type {
 	Byte,
 	Short,
@@ -365,11 +369,11 @@ fn arguments_to_void_pointers<T, F>(arguments: &[Value], callback: F) -> T
 					copy_into_ptr!(as_int, ptr, size)
 				},
 				Value::String(ref v) => {
-					let string = CString::from_slice(v.as_bytes());
+					let string = CString::new(v.as_bytes()).unwrap();
 					let str_ptr = string.as_ptr();
-					ptr::copy_memory(
+					ptr::copy(
 						ptr,
-						str_ptr as *const libc::c_void,
+						str_ptr as *mut libc::c_void,
 						size as usize
 					);
 				},
@@ -392,7 +396,7 @@ fn arguments_to_void_pointers<T, F>(arguments: &[Value], callback: F) -> T
 //
 
 /// A Java class (not an instance of a class).
-#[derive(Show, Copy)]
+#[derive(Debug, Copy, Clone)]
 pub struct Class {
 	java_class: *mut libc::c_void,
 }
@@ -407,7 +411,7 @@ impl Class {
 		arguments_to_void_pointers(constructor_arguments, |mut values| {
 			let mut types = ffi::arguments_to_type_list(constructor_arguments);
 			unsafe {
-				let signature_cstr = CString::from_slice(signature.as_bytes());
+				let signature_cstr = CString::new(signature.as_bytes()).unwrap();
 				let object_ptr = ffi::create_object(
 					self.java_class,
 					signature_cstr.as_ptr(),
@@ -437,8 +441,8 @@ impl Class {
 			let mut types = ffi::arguments_to_type_list(arguments);
 			unsafe {
 				// Call the static method
-				let name_cstr = CString::from_slice(name.as_bytes());
-				let signature_cstr = CString::from_slice(signature.as_bytes());
+				let name_cstr = CString::new(name.as_bytes()).unwrap();
+				let signature_cstr = CString::new(signature.as_bytes()).unwrap();
 				let return_value = ffi::call_static_method(
 					self.java_class,
 					name_cstr.as_ptr(),
@@ -472,7 +476,7 @@ impl Class {
 //
 
 /// An instance of a Java class.
-#[derive(Show, Copy)]
+#[derive(Debug, Copy, Clone)]
 pub struct Object {
 	java_object: *mut libc::c_void,
 }
@@ -490,8 +494,8 @@ impl Object {
 			unsafe {
 
 				// Call the static method
-				let name_cstr = CString::from_slice(name.as_bytes());
-				let signature_cstr = CString::from_slice(signature.as_bytes());
+				let name_cstr = CString::new(name.as_bytes()).unwrap();
+				let signature_cstr = CString::new(signature.as_bytes()).unwrap();
 				let return_value = ffi::call_method(
 					self.java_object,
 					name_cstr.as_ptr(),
@@ -525,7 +529,7 @@ impl Object {
 //
 
 /// Possible errors that may occur.
-#[derive(Show, Copy)]
+#[derive(Debug, Copy, Clone)]
 pub enum Error {
 	/// Triggered when the creation of the Java virtual machine
 	/// in the `JavaVM::new` function fails.

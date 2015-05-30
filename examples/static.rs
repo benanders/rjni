@@ -6,20 +6,16 @@
 
 extern crate jni;
 
+use std::path::{Path, PathBuf};
 use jni::{JavaVM, Type, Value};
-use std::os;
+use std::env;
 
 
 fn main() {
 	// Find the path to this program's executable file, and look for the
 	// Test.class file in there.
-	let executable_path = match os::self_exe_name() {
-		Some(path) => path,
-
-		// If we can't find the executable's path, then just use
-		// the current directory.
-		None => Path::new("."),
-	};
+	let executable_path = env::current_exe()
+		.unwrap_or(Path::new(".").to_path_buf());
 
 	// Create the Java virtual machine. The argument to this function
 	// is a list of paths that will be combined to create the Java
