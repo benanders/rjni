@@ -1,11 +1,9 @@
 
 //
 //  JNI
-//! A Rust wrapper around the Java Native Interface library.
 //
 
-
-#![feature(libc, convert)]
+//! A Rust wrapper around the Java Native Interface library.
 
 extern crate libc;
 
@@ -21,10 +19,10 @@ mod ffi;
 
 /// Convert a variable into a pointer and copy it into `ptr`.
 macro_rules! copy_into_ptr(
-	($variable:expr, $ptr:expr, $size:expr) => (
+	($src:expr, $dst:expr, $size:expr) => (
 		ptr::copy(
-			$ptr,
-			&($variable) as *const _ as *mut libc::c_void,
+			&($src) as *const _ as *mut libc::c_void,
+			$dst,
 			($size) as usize
 		);
 	)
@@ -42,9 +40,7 @@ pub struct JavaVM {
 	should_call_destructor: bool,
 }
 
-
 impl JavaVM {
-
 	/// Creates a new Java virtual machine using the given list
 	/// of directories as the classpath.
 	pub fn new(classpath_directories: &[PathBuf]) -> Result<JavaVM, Error> {
@@ -92,12 +88,9 @@ impl JavaVM {
 	pub fn set_calls_destructor(&mut self, should: bool) {
 		self.should_call_destructor = should;
 	}
-
 }
 
-
 impl Drop for JavaVM {
-
 	fn drop(&mut self) {
 		if self.should_call_destructor {
 			// Destroy the JVM on drop
@@ -106,7 +99,6 @@ impl Drop for JavaVM {
 			}
 		}
 	}
-
 }
 
 
@@ -130,9 +122,7 @@ pub enum Value {
 	Void,
 }
 
-
 impl Value {
-
 	/// Constructs a value object from a void pointer and type.
 	///
 	/// Panics if content is null.
@@ -278,7 +268,6 @@ impl Value {
 			_ => panic!("Calling `to_string` on value"),
 		}
 	}
-
 }
 
 
@@ -297,9 +286,7 @@ pub enum Type {
 	Void,
 }
 
-
 impl Type {
-
 	/// Returns the type signature string for this type.
 	fn signature(&self) -> &str {
 		match *self {
@@ -315,7 +302,6 @@ impl Type {
 			Type::Void => "V",
 		}
 	}
-
 }
 
 
@@ -338,7 +324,6 @@ fn signature_for_function(arguments: &[Value], return_type: Type) -> String {
 	result
 }
 
-
 /// Converts each value in the arguments array into a void pointer.
 fn arguments_to_void_pointers<T, F>(arguments: &[Value], callback: F) -> T
 		where F: Fn(Vec<*mut libc::c_void>) -> T {
@@ -353,7 +338,7 @@ fn arguments_to_void_pointers<T, F>(arguments: &[Value], callback: F) -> T
 		let ptr = unsafe {
 			// Allocate heap space for the argument
 			let size = value.bytes();
-			let ptr = libc::malloc(size);
+			let ptr = libc::malloc(size as usize);
 
 			// Convert to a void pointer
 			match *value {
@@ -401,9 +386,7 @@ pub struct Class {
 	java_class: *mut libc::c_void,
 }
 
-
 impl Class {
-
 	/// Creates a new instance of this class.
 	pub fn instance(&self, constructor_arguments: &[Value]) -> Result<Object, Error> {
 		let signature = signature_for_function(constructor_arguments, Type::Void);
@@ -466,7 +449,6 @@ impl Class {
 			}
 		})
 	}
-
 }
 
 
@@ -481,9 +463,7 @@ pub struct Object {
 	java_object: *mut libc::c_void,
 }
 
-
 impl Object {
-
 	/// Calls a method on this object instance.
 	pub fn call(&self, name: &str, arguments: &[Value], return_type: Type)
 			-> Result<Value, Error> {
@@ -519,7 +499,6 @@ impl Object {
 			}
 		})
 	}
-
 }
 
 
@@ -550,13 +529,14 @@ pub enum Error {
 	/// method signature does not match.
 	MethodNotFound,
 
+	/// Triggered when an exception occurs.
+	ExceptionOccurred,
+
 	/// Triggered if another internal error occurred.
 	InternalError,
 }
 
-
 impl Error {
-
 	/// Creates an error from a status code.
 	fn from_status_code(code: i32) -> Error {
 		match code {
@@ -565,8 +545,8 @@ impl Error {
 			ffi::ERROR_COULD_NOT_ALLOCATE_MEMORY => Error::MemoryAllocationFailure,
 			ffi::ERROR_CLASS_NOT_FOUND => Error::ClassNotFound,
 			ffi::ERROR_METHOD_NOT_FOUND => Error::MethodNotFound,
+			ffi::ERROR_EXCEPTION_OCCURRED => Error::ExceptionOccurred,
 			_ => Error::InternalError,
 		}
 	}
-
 }

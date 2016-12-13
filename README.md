@@ -4,7 +4,9 @@ Java Native Interface Bindings for Rust
 
 This library provides a somewhat primitive binding to the Java Native Interface in Rust. Arrays and custom classes are not supported yet, just simple static method calling, object instantiation, and method calling on instantiated objects.
 
-I've only tested this on OSX, and you'll almost certainly get a linking error on any other OS due to the compiler not being able to find the jni.h file. I've only added the OSX include directory in the build script, but it should be fairly easy to change.
+It's really just a proof of concept at the moment, and shouldn't be used for anything too serious. It'd be a useful starting point for someone if they wanted to make a more production ready version.
+
+I've only tested this on OSX, and you will get a linker error on any other platform due to a hard-coded include path specific to OSX in the build script (for the `jni.h` header). It should be fairly easy to change for other platforms though.
 
 ### Examples
 

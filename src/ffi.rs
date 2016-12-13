@@ -27,6 +27,7 @@ pub const ERROR_VM_ALREADY_EXISTS: i32 = 1;
 pub const ERROR_COULD_NOT_ALLOCATE_MEMORY: i32 = 3;
 pub const ERROR_CLASS_NOT_FOUND: i32 = 4;
 pub const ERROR_METHOD_NOT_FOUND: i32 = 5;
+pub const ERROR_EXCEPTION_OCCURRED: i32 = 8;
 
 
 /// Converts a type to an integer for passing into function call methods.

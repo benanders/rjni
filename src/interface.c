@@ -12,28 +12,27 @@
 #define SUCCESS 1
 #define FAILURE 0
 
+#define TYPE_BYTE    0
+#define TYPE_SHORT   1
+#define TYPE_INT     2
+#define TYPE_LONG    3
+#define TYPE_FLOAT   4
+#define TYPE_DOUBLE  5
+#define TYPE_BOOLEAN 6
+#define TYPE_CHAR    7
+#define TYPE_STRING  8
+#define TYPE_VOID    9
 
-#define TYPE_BYTE		0
-#define TYPE_SHORT	1
-#define TYPE_INT		2
-#define TYPE_LONG		3
-#define TYPE_FLOAT	4
-#define TYPE_DOUBLE	5
-#define TYPE_BOOLEAN	6
-#define TYPE_CHAR		7
-#define TYPE_STRING	8
-#define TYPE_VOID		9
-
-
-#define ERROR_NONE				-1
-#define ERROR_COULD_NOT_CREATE_VM		0
-#define ERROR_VM_ALREADY_EXISTS		1
-#define ERROR_VM_NOT_CREATED			2
-#define ERROR_COULD_NOT_ALLOCATE_MEMORY	3
-#define ERROR_CLASS_NOT_FOUND			4
-#define ERROR_METHOD_NOT_FOUND		5
-#define ERROR_INVALID_CLASS			6
-#define ERROR_INVALID_OBJECT			7
+#define ERROR_NONE                      -1
+#define ERROR_COULD_NOT_CREATE_VM        0
+#define ERROR_VM_ALREADY_EXISTS          1
+#define ERROR_VM_NOT_CREATED             2
+#define ERROR_COULD_NOT_ALLOCATE_MEMORY  3
+#define ERROR_CLASS_NOT_FOUND            4
+#define ERROR_METHOD_NOT_FOUND           5
+#define ERROR_INVALID_CLASS              6
+#define ERROR_INVALID_OBJECT             7
+#define ERROR_EXCEPTION_OCCURRED         8
 
 
 JavaVM *jvm = NULL;
@@ -48,14 +47,14 @@ int create_jvm(char *classpath) {
 		JavaVMOption options[3];
 		JavaVMInitArgs vm_args;
 
-		char destination[200];
+		char destination[400];
 		strcpy(destination, "-Djava.class.path=");
 		strcat(destination, classpath);
 		options[0].optionString = destination;
 		options[1].optionString = "-Xms256m";
 		options[2].optionString = "-Xmx1024m";
 
-		vm_args.version = JNI_VERSION_1_2;
+		vm_args.version = JNI_VERSION_1_6;
 		vm_args.nOptions = 3;
 		vm_args.options = options;
 		long status = JNI_CreateJavaVM(&jvm, (void **) &env, &vm_args);
@@ -99,6 +98,12 @@ void * class_from_name(char *name) {
 
 	// Find the class
 	jclass java_class = (*env)->FindClass(env, name);
+	if ((*env)->ExceptionOccurred(env)) {
+		(*env)->ExceptionDescribe(env);
+		last_error = ERROR_EXCEPTION_OCCURRED;
+		return NULL;
+	}
+
 	if (java_class == NULL) {
 		last_error = ERROR_CLASS_NOT_FOUND;
 		return NULL;
@@ -181,6 +186,12 @@ void * call_static_method(void *java_class, char *name, char *signature, int ret
 
 	// Get method ID
 	jmethodID method_id = (*env)->GetStaticMethodID(env, cast_class, name, signature);
+	if ((*env)->ExceptionOccurred(env)) {
+		(*env)->ExceptionDescribe(env);
+		last_error = ERROR_EXCEPTION_OCCURRED;
+		return NULL;
+	}
+
 	if (method_id == NULL) {
 		last_error = ERROR_METHOD_NOT_FOUND;
 		return NULL;
@@ -226,8 +237,19 @@ void * call_static_method(void *java_class, char *name, char *signature, int ret
 			((jvalue *) result)->c =
 				(*env)->CallStaticCharMethodA(env, cast_class, method_id, args);
 		}
+
+		if ((*env)->ExceptionOccurred(env)) {
+			(*env)->ExceptionDescribe(env);
+			last_error = ERROR_EXCEPTION_OCCURRED;
+			return NULL;
+		}
 	} else if (return_type == TYPE_STRING) {
 		jstring value = (*env)->CallStaticObjectMethodA(env, cast_class, method_id, args);
+		if ((*env)->ExceptionOccurred(env)) {
+			(*env)->ExceptionDescribe(env);
+			last_error = ERROR_EXCEPTION_OCCURRED;
+			return NULL;
+		}
 
 		// Allocate the results buffer
 		int size = (*env)->GetStringUTFLength(env, value);
@@ -274,6 +296,11 @@ void * create_object(void *java_class, char *signature, int arg_count, int *arg_
 
 	// Get constructor method ID
 	jmethodID constructor_id = (*env)->GetMethodID(env, cast_class, "<init>", signature);
+	if ((*env)->ExceptionOccurred(env)) {
+		(*env)->ExceptionDescribe(env);
+		last_error = ERROR_EXCEPTION_OCCURRED;
+		return NULL;
+	}
 	if (constructor_id == NULL) {
 		last_error = ERROR_METHOD_NOT_FOUND;
 		return NULL;
@@ -286,6 +313,11 @@ void * create_object(void *java_class, char *signature, int arg_count, int *arg_
 	}
 
 	jobject instance = (*env)->NewObjectA(env, cast_class, constructor_id, args);
+	if ((*env)->ExceptionOccurred(env)) {
+		(*env)->ExceptionDescribe(env);
+		last_error = ERROR_EXCEPTION_OCCURRED;
+		return NULL;
+	}
 
 	free(args);
 	return (void *) instance;
@@ -312,6 +344,11 @@ void * call_method(void *java_object, char *name, char *signature, int return_ty
 
 	// Get class
 	jclass object_class = (*env)->GetObjectClass(env, cast_object);
+	if ((*env)->ExceptionOccurred(env)) {
+		(*env)->ExceptionDescribe(env);
+		last_error = ERROR_EXCEPTION_OCCURRED;
+		return NULL;
+	}
 	if (object_class == NULL) {
 		last_error = ERROR_INVALID_CLASS;
 		return NULL;
@@ -319,6 +356,11 @@ void * call_method(void *java_object, char *name, char *signature, int return_ty
 
 	// Get method ID
 	jmethodID method_id = (*env)->GetMethodID(env, object_class, name, signature);
+	if ((*env)->ExceptionOccurred(env)) {
+		(*env)->ExceptionDescribe(env);
+		last_error = ERROR_EXCEPTION_OCCURRED;
+		return NULL;
+	}
 	if (method_id == NULL) {
 		last_error = ERROR_METHOD_NOT_FOUND;
 		return NULL;
@@ -364,8 +406,19 @@ void * call_method(void *java_object, char *name, char *signature, int return_ty
 			((jvalue *)result)->c =
 				(*env)->CallCharMethodA(env, cast_object, method_id, args);
 		}
+
+		if ((*env)->ExceptionOccurred(env)) {
+			(*env)->ExceptionDescribe(env);
+			last_error = ERROR_EXCEPTION_OCCURRED;
+			return NULL;
+		}
 	} else if (return_type == TYPE_STRING) {
 		jstring value = (*env)->CallObjectMethodA(env, cast_object, method_id, args);
+		if ((*env)->ExceptionOccurred(env)) {
+			(*env)->ExceptionDescribe(env);
+			last_error = ERROR_EXCEPTION_OCCURRED;
+			return NULL;
+		}
 
 		// Allocate the results buffer
 		int size = (*env)->GetStringUTFLength(env, value);
@@ -384,6 +437,11 @@ void * call_method(void *java_object, char *name, char *signature, int return_ty
 		(*env)->ReleaseStringUTFChars(env, value, str);
 	} else {
 		(*env)->CallVoidMethodA(env, cast_object, method_id, args);
+		if ((*env)->ExceptionOccurred(env)) {
+			(*env)->ExceptionDescribe(env);
+			last_error = ERROR_EXCEPTION_OCCURRED;
+			return NULL;
+		}
 	}
 
 	free(args);
