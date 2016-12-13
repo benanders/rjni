@@ -329,6 +329,7 @@ fn arguments_to_void_pointers<T, F>(arguments: &[Value], callback: F) -> T
 		where F: Fn(Vec<*mut libc::c_void>) -> T {
 	let mut values = Vec::new();
 	for value in arguments.iter() {
+		println!("Converting value {:?}", value);
 		// Protect against passing in void
 		match *value {
 			Value::Void => panic!("Cannot pass `Value::Void` as an argument to a function."),
@@ -357,8 +358,8 @@ fn arguments_to_void_pointers<T, F>(arguments: &[Value], callback: F) -> T
 					let string = CString::new(v.as_bytes()).unwrap();
 					let str_ptr = string.as_ptr();
 					ptr::copy(
-						ptr,
 						str_ptr as *mut libc::c_void,
+						ptr,
 						size as usize
 					);
 				},
