@@ -113,7 +113,7 @@ pub type MethodFn = extern "C" fn(env: *mut JNIEnv, obj: jobject, methodID: jmet
 pub type GetFieldFn = extern "C" fn(env: *mut JNIEnv, obj: jobject, fieldID: jfieldID) -> jvalue;
 pub type SetFieldFn = extern "C" fn(env: *mut JNIEnv, obj: jobject, fieldID: jfieldID, val: jvalue);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct jvalue {
 	pub data: u64,

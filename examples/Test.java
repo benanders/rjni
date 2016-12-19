@@ -11,8 +11,11 @@
 //
 //   javac -source 1.6 -target 1.6 Test.java
 
+import java.lang.System;
+
 public class Test {
 	public int current = 0;
+	public static String message = "Hello!";
 
 	public Test(int current) {
 		this.current = current;
@@ -31,6 +34,10 @@ public class Test {
 	}
 
 	public static String append(String input) {
-		return input + " there from java";
+		return input + " there from Java!";
+	}
+
+	public static void printMessage() {
+		System.out.println("The message is: " + message);
 	}
 }

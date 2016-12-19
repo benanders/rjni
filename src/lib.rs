@@ -610,8 +610,8 @@ impl<'a> Class<'a> {
 	/// Returns the ID for a field with the given name and type.
 	fn field_id<T: Signature>(&self, name: &str, kind: &T) -> ffi::jfieldID {
 		let env = self.jvm.env;
-		let signature = CString::new(kind.signature()).unwrap();
 		let name = CString::new(name).unwrap();
+		let signature = CString::new(kind.signature()).unwrap();
 		unsafe {
 			((**env).GetFieldID)(
 				env,
@@ -626,8 +626,8 @@ impl<'a> Class<'a> {
 	/// type.
 	fn static_field_id<T: Signature>(&self, name: &str, kind: &T) -> ffi::jfieldID {
 		let env = self.jvm.env;
-		let signature = CString::new(kind.signature()).unwrap();
 		let name = CString::new(name).unwrap();
+		let signature = CString::new(kind.signature()).unwrap();
 		unsafe {
 			((**env).GetStaticFieldID)(
 				env,
@@ -639,13 +639,59 @@ impl<'a> Class<'a> {
 	}
 
 	/// Get the value of a static field on this class.
-	pub fn static_field(&self) {
+	pub fn static_field(&self, name: &str, kind: Type) -> Result<Value> {
+		let env = self.jvm.env;
+
+		// Get the field ID and check it exists
+		let field_id = self.static_field_id(name, &kind);
+		if field_id == 0 as ffi::jfieldID {
+			return Err(Error::not_found(self.jvm));
+		}
+
+		// Get the contents of the field
+		let result = unsafe {
+			let base: *const ffi::GetFieldFn = mem::transmute(&(**env).GetStaticObjectField);
+			let offset = kind.offset();
+			let fn_ptr = base.offset(offset as isize);
+			(*fn_ptr)(env, self.raw, field_id)
+		};
+
+		// Convert the result into a value
+		if self.jvm.has_exception() {
+			Err(Error::from_exception(self.jvm))
+		} else {
+			Ok(Value::from_jvalue(result, &kind, self.jvm))
+		}
 
 	}
 
 	/// Set the value of a static field on this class.
-	pub fn set_static_field(&self) {
+	pub fn set_static_field(&self, name: &str, value: Value) -> Result<()> {
+		let env = self.jvm.env;
 
+		// Get the field ID and check it exists
+		let field_id = self.static_field_id(name, &value);
+		if field_id == 0 as ffi::jfieldID {
+			return Err(Error::not_found(self.jvm));
+		}
+
+		// Convert the value into a useable form
+		let java_value = value.to_jvalue(self.jvm);
+
+		// Set the contents of the field
+		unsafe {
+			let base: *const ffi::SetFieldFn = mem::transmute(&(**env).SetStaticObjectField);
+			let offset = value.offset();
+			let fn_ptr = base.offset(offset as isize);
+			(*fn_ptr)(env, self.raw, field_id, java_value);
+		}
+
+		// Convert the result into a value
+		if self.jvm.has_exception() {
+			Err(Error::from_exception(self.jvm))
+		} else {
+			Ok(())
+		}
 	}
 }
 
@@ -1138,15 +1184,15 @@ impl Error {
 	/// Create a new error from the most recent exception. The caller guarantees
 	/// that an exception has occurred.
 	fn from_exception(jvm: &JavaVM) -> Error {
-		// Get the thrown exception
-		let obj = jvm.exception_obj();
-		jvm.clear_exception();
-
-		// Get the class name
-		let name = obj.class().name();
-
-		// Get the message associated with the error
-		let result = obj.call("getMessage", &[], Type::Str).unwrap().as_str();
+//		// Get the thrown exception
+//		let obj = jvm.exception_obj();
+//		jvm.clear_exception();
+//
+//		// Get the class name
+//		let name = obj.class().name();
+//
+//		// Get the message associated with the error
+//		let result = obj.call("getMessage", &[], Type::Str).unwrap().as_str();
 
 		// Get the stack trace by creating a StringWriter, giving it to a
 		// PrintWriter, then calling printStackTrace on the exception
