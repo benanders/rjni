@@ -110,6 +110,8 @@ pub type jmethodID = *mut libc::c_void;
 
 pub enum Empty {}
 pub type MethodFn = extern "C" fn(env: *mut JNIEnv, obj: jobject, methodID: jmethodID, args: *const jvalue) -> jvalue;
+pub type GetFieldFn = extern "C" fn(env: *mut JNIEnv, obj: jobject, fieldID: jfieldID) -> jvalue;
+pub type SetFieldFn = extern "C" fn(env: *mut JNIEnv, obj: jobject, fieldID: jfieldID, val: jvalue);
 
 #[derive(Clone, Copy)]
 #[repr(C)]

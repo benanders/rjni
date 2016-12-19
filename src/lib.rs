@@ -520,6 +520,54 @@ impl<'a> Class<'a> {
 		}
 	}
 
+	/// Returns the ID for a method with the given name, arguments, and return
+	/// type.
+	fn method_id(&self, name: &str, args: &[Value], return_type: &Type)
+			-> ffi::jmethodID {
+		let env = self.jvm.env;
+
+		// Get the function signature from the arguments and return type
+		let fn_sig = function_signature(args, &return_type);
+		let signature = CString::new(fn_sig).unwrap();
+
+		// Convert the name of the method into a useful form
+		let name = CString::new(name).unwrap();
+
+		// Call the FFI function
+		unsafe {
+			((**env).GetMethodID)(
+				env,
+				self.raw,
+				name.as_ptr(),
+				signature.as_ptr(),
+			)
+		}
+	}
+
+	/// Returns the ID for a static method on this class with the given name,
+	/// arguments, and return type.
+	fn static_method_id(&self, name: &str, args: &[Value], return_type: &Type)
+			-> ffi::jmethodID {
+		let env = self.jvm.env;
+
+		// Get the function signature from the arguments and return type
+		let sig = function_signature(args, &return_type);
+		let signature = CString::new(sig).unwrap();
+
+		// Convert the name of the method into a useful form
+		let name = CString::new(name).unwrap();
+
+		// Call the FFI function
+		unsafe {
+			((**env).GetStaticMethodID)(
+				env,
+				self.raw,
+				name.as_ptr(),
+				signature.as_ptr(),
+			)
+		}
+	}
+
 	/// Call a static method on this class.
 	///
 	/// If the function doesn't return a value (ie. a void return type), then
@@ -528,23 +576,11 @@ impl<'a> Class<'a> {
 	/// Value::Void should not be passed as an argument, and will generate an
 	/// exception.
 	pub fn call_static(&self, name: &str, args: &[Value], return_type: Type)
-			-> Result<Value> {
+	                   -> Result<Value> {
 		let env = self.jvm.env;
 
-		// Get the method ID
-		let fn_sig = function_signature(args, &return_type);
-		let signature = CString::new(fn_sig).unwrap();
-		let name = CString::new(name).unwrap();
-		let method_id = unsafe {
-			((**env).GetStaticMethodID)(
-				env,
-				self.raw,
-				name.as_ptr(),
-				signature.as_ptr(),
-			)
-		};
-
-		// Check the ID exists
+		// Get the method ID and check it exists
+		let method_id = self.static_method_id(name, args, &return_type);
 		if method_id == 0 as ffi::jmethodID {
 			return Err(Error::not_found(self.jvm));
 		}
@@ -568,6 +604,37 @@ impl<'a> Class<'a> {
 			Err(Error::from_exception(self.jvm))
 		} else {
 			Ok(Value::from_jvalue(result, &return_type, self.jvm))
+		}
+	}
+
+	/// Returns the ID for a field with the given name and type.
+	fn field_id<T: Signature>(&self, name: &str, kind: &T) -> ffi::jfieldID {
+		let env = self.jvm.env;
+		let signature = CString::new(kind.signature()).unwrap();
+		let name = CString::new(name).unwrap();
+		unsafe {
+			((**env).GetFieldID)(
+				env,
+				self.raw,
+				name.as_ptr(),
+				signature.as_ptr(),
+			)
+		}
+	}
+
+	/// Returns the ID for a static field on this class with the given name and
+	/// type.
+	fn static_field_id<T: Signature>(&self, name: &str, kind: &T) -> ffi::jfieldID {
+		let env = self.jvm.env;
+		let signature = CString::new(kind.signature()).unwrap();
+		let name = CString::new(name).unwrap();
+		unsafe {
+			((**env).GetStaticFieldID)(
+				env,
+				self.raw,
+				name.as_ptr(),
+				signature.as_ptr(),
+			)
 		}
 	}
 
@@ -631,21 +698,9 @@ impl<'a> Object<'a> {
 			-> Result<Value> {
 		let env = self.jvm.env;
 
-		// Get the method ID
+		// Get the method ID and check it exists
 		let class = self.class();
-		let fn_sig = function_signature(args, &return_type);
-		let signature = CString::new(fn_sig).unwrap();
-		let name = CString::new(name).unwrap();
-		let method_id = unsafe {
-			((**env).GetMethodID)(
-				env,
-				class.raw,
-				name.as_ptr(),
-				signature.as_ptr(),
-			)
-		};
-
-		// Check the ID exists
+		let method_id = class.method_id(name, args, &return_type);
 		if method_id == 0 as ffi::jmethodID {
 			return Err(Error::not_found(self.jvm));
 		}
@@ -673,13 +728,60 @@ impl<'a> Object<'a> {
 	}
 
 	/// Get the value of a public field on this object.
-	pub fn field() {
+	pub fn field(&self, name: &str, kind: Type) -> Result<Value> {
+		let env = self.jvm.env;
 
+		// Get the field ID and check it exists
+		let class = self.class();
+		let field_id = class.field_id(name, &kind);
+		if field_id == 0 as ffi::jfieldID {
+			return Err(Error::not_found(self.jvm));
+		}
+
+		// Get the contents of the field
+		let result = unsafe {
+			let base: *const ffi::GetFieldFn = mem::transmute(&(**env).GetObjectField);
+			let offset = kind.offset();
+			let fn_ptr = base.offset(offset as isize);
+			(*fn_ptr)(env, self.raw, field_id)
+		};
+
+		// Convert the result into a value
+		if self.jvm.has_exception() {
+			Err(Error::from_exception(self.jvm))
+		} else {
+			Ok(Value::from_jvalue(result, &kind, self.jvm))
+		}
 	}
 
 	/// Set the value of a public field on this object.
-	pub fn set_field() {
+	pub fn set_field(&self, name: &str, value: Value) -> Result<()> {
+		let env = self.jvm.env;
 
+		// Get the field ID and check it exists
+		let class = self.class();
+		let field_id = class.field_id(name, &value);
+		if field_id == 0 as ffi::jfieldID {
+			return Err(Error::not_found(self.jvm));
+		}
+
+		// Convert the value into a useable form
+		let java_value = value.to_jvalue(self.jvm);
+
+		// Set the contents of the field
+		unsafe {
+			let base: *const ffi::SetFieldFn = mem::transmute(&(**env).SetObjectField);
+			let offset = value.offset();
+			let fn_ptr = base.offset(offset as isize);
+			(*fn_ptr)(env, self.raw, field_id, java_value);
+		}
+
+		// Convert the result into a value
+		if self.jvm.has_exception() {
+			Err(Error::from_exception(self.jvm))
+		} else {
+			Ok(())
+		}
 	}
 }
 
@@ -688,6 +790,12 @@ impl<'a> Object<'a> {
 //
 //  Values and Types
 //
+
+/// Implemented by both `Type` and `Value`.
+trait Signature {
+	/// Returns the identifying type signature for this value.
+	fn signature(&self) -> String;
+}
 
 /// The type of a Java value returned from a method.
 #[derive(Debug, Clone)]
@@ -713,7 +821,7 @@ pub enum Type {
 
 impl Type {
 	/// Returns the function signature component for this value.
-	fn signature(&self) -> &'static str {
+	fn static_signature(&self) -> &'static str {
 		match self {
 			&Type::Boolean => "Z",
 			&Type::Byte => "B",
@@ -750,7 +858,19 @@ impl Type {
 	}
 }
 
+impl Signature for Type {
+	fn signature(&self) -> String {
+		let mut result = String::from(self.static_signature());
+		if let &Type::Object(class_name) = self {
+			result.push_str(class_name);
+			result.push(';');
+		}
+		result
+	}
+}
 
+
+/// Expands a `Value` type into one of its subtypes.
 macro_rules! expand {
 	($name:ident, $enum_name:ident, $kind:ty) => {
 		fn $name(self) -> $kind {
@@ -785,7 +905,7 @@ pub enum Value<'a> {
 
 impl<'a> Value<'a> {
 	/// Returns the function signature component for this value.
-	fn signature(&self) -> &'static str {
+	fn static_signature(&self) -> &'static str {
 		match self {
 			&Value::Boolean(_) => "Z",
 			&Value::Byte(_) => "B",
@@ -799,6 +919,25 @@ impl<'a> Value<'a> {
 			&Value::Void => "V",
 			// The object type is handled properly in the calling function
 			&Value::Object(_) => "L",
+		}
+	}
+
+	/// Returns the integer offset of the corresponding method call function
+	/// within the JNIEnv struct.
+	fn offset(&self) -> usize {
+		match self {
+			// Use the `CallObjectMethod` for both objects and strings
+			&Value::Object(_) => 0,
+			&Value::Str(_) => 0,
+			&Value::Boolean(_) => 1,
+			&Value::Byte(_) => 2,
+			&Value::Char(_) => 3,
+			&Value::Short(_) => 4,
+			&Value::Int(_) => 5,
+			&Value::Long(_) => 6,
+			&Value::Float(_) => 7,
+			&Value::Double(_) => 8,
+			&Value::Void => 9,
 		}
 	}
 
@@ -875,6 +1014,16 @@ impl<'a> Value<'a> {
 	expand!(as_str, Str, String);
 }
 
+impl<'a> Signature for Value<'a> {
+	fn signature(&self) -> String {
+		let mut result = String::from(self.static_signature());
+		if let &Value::Object(ref obj) = self {
+			obj.class().push_name(&mut result);
+		}
+		result
+	}
+}
+
 /// Returns the function signature as a string for a method with the given
 /// arguments and return type.
 fn function_signature(args: &[Value], return_type: &Type) -> String {
@@ -887,7 +1036,7 @@ fn function_signature(args: &[Value], return_type: &Type) -> String {
 	for arg in args {
 		// Each Java type has a 1 character type associated with it, which we
 		// push onto the signature to indicate another argument to the function
-		sig.push_str(arg.signature());
+		sig.push_str(arg.static_signature());
 
 		// We need to push the class name of an object to the string after the
 		// `L` character
@@ -901,7 +1050,7 @@ fn function_signature(args: &[Value], return_type: &Type) -> String {
 	sig.push(')');
 
 	// Push the return type's signature
-	sig.push_str(return_type.signature());
+	sig.push_str(return_type.static_signature());
 	if let &Type::Object(name) = return_type {
 		sig.push_str(name);
 		sig.push(';');

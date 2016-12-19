@@ -5,3 +5,4 @@
 *.a
 *.swp
 /.idea
+rjni.iml
