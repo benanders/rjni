@@ -1,553 +1,1081 @@
 
 //
-//  JNI
+//  rjni
 //
 
-//! A Rust wrapper around the Java Native Interface library.
+//! User friendly bindings to the Java Native Interface.
+//!
+//! # Usage
+//!
+//! First you'll need to compile your Java source code, either as separate
+//! `.class` files, or package them together as a `.jar` archive.
+//!
+//! You need to make sure you target the Java compiler to the JVM version you
+//! plan to use. This is done through the `-target` and `-source` command line
+//! arguments to `javac`.
+//!
+//! For example, if you have a `/path/to/project/com/me/Test.java` file (ie.
+//! the class `com.me.Test`) and you intend to target the 1.6 JVM:
+//!
+//! ```bash
+//! $ javac -target 1.6 -source 1.6 /path/to/project/com/me/Test.java
+//! ```
+//!
+//! This will create a `/path/to/project/com/me/Test.class` file.
+//!
+//! Then when you create the JVM in Rust, you need to add `/path/to/project`
+//! (ie.  the directory containing the root of your Java code) to the classpath,
+//! and specify the correct JVM version:
+//!
+//! ```rust
+//! use rjni::{Jvm, Version, Classpath, Options};
+//!
+//! fn main() {
+//! 	// Create a custom classpath, pointing to the directory containing the
+//! 	// root of your Java code
+//! 	let mut classpath = Classpath::new();
+//! 	classpath.add(&Path::new("/path/to/project"));
+//!
+//! 	// Create a series of configuration options for the JVM, specifying the
+//! 	// version of the JVM we want to use (1.6), and our custom classpath
+//! 	let mut options = Options::new();
+//! 	options.version(Version::V16);
+//! 	options.classpath(classpath);
+//!
+//! 	// Create the JVM with these options
+//! 	let jvm = Jvm::new(options).unwrap();
+//!
+//! 	// Get the `com.me.Test` class using the JVM
+//! 	let class = jvm.class("com/me/Test").unwrap();
+//!
+//! 	// ...
+//! }
+//! ```
+
+#![allow(dead_code)]
 
 extern crate libc;
 
-use std::mem;
-use std::ptr;
-use std::str;
-use std::ffi::{CString, CStr};
-
-use std::path::PathBuf;
-
 mod ffi;
 
-
-/// Convert a variable into a pointer and copy it into `ptr`.
-macro_rules! copy_into_ptr(
-	($src:expr, $dst:expr, $size:expr) => (
-		ptr::copy(
-			&($src) as *const _ as *mut libc::c_void,
-			$dst,
-			($size) as usize
-		);
-	)
-);
+use std::path::{PathBuf, Path};
+use std::ffi::{CString, CStr};
+use std::{mem, ptr, error, fmt, env, char};
 
 
+/// All possible versions of the JVM.
+///
+/// Not all of these versions may actually be available, and an "unsupported
+/// version" error may be triggered upon creating the JVM.
+///
+/// The integer values of these versions correspond to the FFI version numbers
+/// required by the JVM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Version {
+	V11 = 0x00010001,
+	V12 = 0x00010002,
+	V14 = 0x00010004,
+	V15 = 0x00010005,
+	V16 = 0x00010006,
+	V17 = 0x00010007,
+	V18 = 0x00010008,
+}
 
-//
-//  Java VM
-//
+
+/// Initialisation options required upon creation of the JVM.
+pub struct Options {
+	version: Version,
+	classpath: Classpath,
+	initial_heap_size: usize,
+	max_heap_size: usize,
+	ignore_unrecognised: bool,
+	custom: Vec<String>,
+
+	/// This is required in order to preserve the existence of the heap
+	/// allocated CString instance, to prevent it from being dropped while a
+	/// pointer to its contents is used in the JavaVMInitArgs list.
+	option_strings: Vec<CString>,
+	options: Vec<ffi::JavaVMOption>,
+}
+
+impl Options {
+	/// Create an empty set of options.
+	pub fn new() -> Options {
+		Options {
+			version: Version::V11,
+			classpath: Classpath::new(),
+			initial_heap_size: 0,
+			max_heap_size: 0,
+			ignore_unrecognised: true,
+			custom: Vec::new(),
+			option_strings: Vec::new(),
+			options: Vec::new(),
+		}
+	}
+
+	/// Set the JVM version to use.
+	pub fn version(mut self, version: Version) -> Options {
+		self.version = version;
+		self
+	}
+
+	/// Set the classpath, which contains a list of filesystem directories that
+	/// the JVM will search when looking for a class to load.
+	pub fn classpath(mut self, classpath: Classpath) -> Options {
+		self.classpath = classpath;
+		self
+	}
+
+	/// Set the initial heap size for the JVM in bytes.
+	///
+	/// Call this with a size of 0 to unset any previously set value.
+	pub fn initial_heap_size(mut self, size: usize) -> Options {
+		self.initial_heap_size = size;
+		self
+	}
+
+	/// Set the maximum heap size for the JVM in bytes.
+	///
+	/// Call this with a size of 0 to unset any previously set value.
+	pub fn max_heap_size(mut self, size: usize) -> Options {
+		self.max_heap_size = size;
+		self
+	}
+
+	/// Set whether the JVM should ignore unrecognised arguments, or trigger an
+	/// exception when one is provided.
+	pub fn ignore_unrecognized_arguments(mut self, flag: bool) -> Options {
+		self.ignore_unrecognised = flag;
+		self
+	}
+
+	/// Adds a custom, string based option (like passing in a command line
+	/// argument to the `java` process).
+	pub fn custom<T: ToString>(mut self, arg: T) -> Options {
+		self.custom.push(arg.to_string());
+		self
+	}
+
+	/// Builds the underlying list of options.
+	///
+	/// This function is marked unsafe since we use unsafe pointers with regards
+	/// to the FFI struct. The caller must ensure that the lifetime of the
+	/// options struct is longer than that of the returned arguments struct.
+	///
+	/// This function must take a mutable pointer to `self`, rather than consume
+	/// self, since the Options struct must outlive the returned JavaVMInitArgs
+	/// struct.
+	unsafe fn build(&mut self) -> ffi::JavaVMInitArgs {
+		// Don't bother specifying heap size configurations if they're equal to
+		// 0, as this is the marker value we used
+		if self.initial_heap_size > 0 {
+			let option = format!("-Xms{}", self.initial_heap_size);
+			self.add_option(option);
+		}
+
+		if self.max_heap_size > 0 {
+			let option = format!("-Xmx{}", self.max_heap_size);
+			self.add_option(option);
+		}
+
+		// Construct the classpath from a single string, so we only have a
+		// single heap allocation (and potentially some future reallocations if
+		// the classpath.build function requires it)
+		let mut classpath = String::from("-Djava.class.path=");
+		self.classpath.build(&mut classpath);
+		self.add_option(classpath);
+
+		// Pop each custom option off the list until no more are there, so we
+		// don't have to call .clone() on each item in the list and waste heap
+		// memory on duplicating a bunch of strings
+		while let Some(option) = self.custom.pop() {
+			self.add_option(option);
+		}
+
+		ffi::JavaVMInitArgs {
+			version: mem::transmute(self.version),
+			nOptions: self.options.len() as ffi::jint,
+			options: self.options.as_mut_ptr(),
+			ignoreUnrecognized: self.ignore_unrecognised as ffi::jboolean,
+		}
+	}
+
+	/// Adds an option to the list of FFI options, used when we're constructing
+	/// the final options list.
+	fn add_option(&mut self, option: String) {
+		let cstr = CString::new(option).unwrap();
+		self.options.push(ffi::JavaVMOption {
+			optionString: cstr.as_ptr(),
+			extraInfo: ptr::null(),
+		});
+
+		// Transfer ownership of the CString to the options struct so that it
+		// lives for at least as long as the pointer we just created using
+		// .as_ptr() above
+		self.option_strings.push(cstr);
+	}
+}
+
+impl Default for Options {
+	/// Uses the JNI interface to select the recommended initialisation options
+	/// for the JVM.
+	///
+	/// Automatically selects the most recently supported version of the JVM on
+	/// this system.
+	fn default() -> Options {
+		// Extract the information from the set of default arguments
+		let args = latest_jvm_version().expect("No supported JNI version");
+		let version = unsafe { mem::transmute(args.version) };
+		let ignore_unrecognised = args.ignoreUnrecognized == ffi::JNI_TRUE;
+		Options {
+			version: version,
+			classpath: Classpath::new(),
+			initial_heap_size: 0,
+			max_heap_size: 0,
+			ignore_unrecognised: ignore_unrecognised,
+			custom: Vec::new(),
+
+			option_strings: Vec::new(),
+			options: Vec::new(),
+		}
+	}
+}
+
+/// Determines the most recently supported version of the JVM on this system,
+/// and returns the JavaVMInitArgs struct for this version, or None if there is
+/// no supported version of JVM.
+fn latest_jvm_version() -> Option<ffi::JavaVMInitArgs> {
+	// The FFI function expects the version field on the args struct to be set
+	// before calling, and the return value of the function will indicate if
+	// the requested version is supported or not (ie. JNI_OK or JNI_EVERSION).
+	//
+	// We use this in order to determine the most recently supported JVM
+	// version by iterating in reverse order over the versions.
+	for version in (Version::V11 as u32 .. Version::V18 as u32).rev() {
+		// Create a default arguments struct with the pre-specified version
+		let mut args = ffi::JavaVMInitArgs {
+			version: unsafe { mem::transmute(version) },
+			nOptions: 0,
+			options: ptr::null_mut(),
+			ignoreUnrecognized: ffi::JNI_TRUE,
+		};
+
+		// Check if this version is supported, indicated by the lack of an
+		// error
+		let code = unsafe { ffi::JNI_GetDefaultJavaVMInitArgs(&mut args) };
+		if code == ffi::JNIError::JNI_OK {
+			return Some(args);
+		}
+	}
+
+	// If we reached here, then there are apparently no supported JNI versions
+	// on this system (strangely?)
+	None
+}
+
+
+/// A structured list of filesystem directories which the JVM will search when
+/// looking for a class to load.
+#[derive(Debug)]
+pub struct Classpath {
+	paths: Vec<PathBuf>,
+}
+
+impl Classpath {
+	/// Create an empty classpath.
+	pub fn new() -> Classpath {
+		Classpath {
+			paths: Vec::new(),
+		}
+	}
+
+	/// Add a path to the classpath.
+	///
+	/// This can either be the path to a directory containing a number of
+	/// compiled .class files, or the direct path to a .jar archive.
+	///
+	/// For example, if you're looking for the `Test.class` file in the folder
+	/// `/thing`, then you should add the path `/thing` to the classpath. If
+	/// you've added the `Test.class` file to a Jar file at `/thing/myjar.jar`,
+	/// then you should add the path `/thing/myjar.jar` to the classpath.
+	pub fn add<T: AsRef<Path>>(mut self, path: T) -> Classpath {
+		self.paths.push(path.as_ref().to_owned());
+		self
+	}
+
+	/// Builds and returns the underlying classpath string.
+	fn build(&self, string: &mut String) {
+		// Iterate over each path
+		for path in &self.paths {
+			let converted_path = path.to_str().unwrap();
+			string.push_str(converted_path);
+
+			// The Java classpath separator is different depending on the
+			// platform. On Windows it's `;`, on Unix it's `:`
+			if env::consts::FAMILY == "windows" {
+				string.push(';');
+			} else {
+				string.push(':');
+			}
+		}
+	}
+}
+
 
 /// An instance of a Java virtual machine.
-/// JNI does not allow multiple VMs to be created.
+///
+/// Multiple instances of a JVM can be created.
+#[derive(Debug)]
 pub struct JavaVM {
-	should_call_destructor: bool,
+	vm: *mut ffi::JavaVM,
+	env: *mut ffi::JNIEnv,
 }
 
 impl JavaVM {
-	/// Creates a new Java virtual machine using the given list
-	/// of directories as the classpath.
-	pub fn new(classpath_directories: &[PathBuf]) -> Result<JavaVM, Error> {
-		let mut classpath = String::new();
-		for dir in classpath_directories {
-			let string = dir.to_str().expect("Path could not be converted into a string");
-			classpath.push_str(string);
-			classpath.push(':');
-		}
-
-		let success = unsafe {
-			let cstr = CString::new(classpath.as_bytes()).unwrap();
-			ffi::create_jvm(cstr.as_ptr())
-		};
-
-		if success != ffi::SUCCESS {
-			Err(Error::from_status_code(ffi::error_status()))
-		} else {
-			Ok(JavaVM {
-				should_call_destructor: true,
-			})
-		}
-	}
-
-	/// Creates a class from the given class name.
-	///
-	/// Note this doesn't instantiate an instance of this class.
-	pub fn class(&self, name: &str) -> Result<Class, Error> {
-		let ptr = unsafe {
-			let cstr = CString::new(name.as_bytes()).unwrap();
-			ffi::class_from_name(cstr.as_ptr())
-		};
-
-		if ptr.is_null() {
-			Err(Error::from_status_code(ffi::error_status()))
-		} else {
-			Ok(Class {
-				java_class: ptr,
-			})
-		}
-	}
-
-	/// Sets whether the Java virtual machine will be explicitly destroyed
-	/// when the JavaVM is dropped.
-	pub fn set_calls_destructor(&mut self, should: bool) {
-		self.should_call_destructor = should;
-	}
-}
-
-impl Drop for JavaVM {
-	fn drop(&mut self) {
-		if self.should_call_destructor {
-			// Destroy the JVM on drop
-			unsafe {
-				ffi::destroy_jvm();
-			}
-		}
-	}
-}
-
-
-
-//
-//  Types and Values
-//
-
-/// A function argument or return value.
-#[derive(Debug, Clone)]
-pub enum Value {
-	Byte(i8),
-	Short(i16),
-	Int(i32),
-	Long(i64),
-	Float(f32),
-	Double(f64),
-	Boolean(bool),
-	Char(char),
-	String(String),
-	Void,
-}
-
-impl Value {
-	/// Constructs a value object from a void pointer and type.
-	///
-	/// Panics if content is null.
-	fn from_ptr(value_type: Type, content: *mut libc::c_void) -> Value {
+	/// Create a new virtual machine from the given set of options.
+	pub fn new(mut options: Options) -> Result<JavaVM> {
 		unsafe {
-			if content.is_null() {
-				panic!("Passing in NULL pointer to Value::from_ptr.");
+			// Construct the FFI options struct
+			let mut args = options.build();
+
+			// Create the JVM
+			let mut vm = ptr::null_mut();
+			let mut env = ptr::null_mut();
+			let status = ffi::JNI_CreateJavaVM(&mut vm, &mut env, &mut args);
+
+			// Check for an error
+			if status == ffi::JNIError::JNI_OK {
+				Ok(JavaVM {
+					vm: vm,
+					env: env,
+				})
+			} else {
+				Err(Error::from_ffi(status))
 			}
-
-			let result = match value_type {
-				Type::Byte =>
-					Value::Byte(*(content as *mut i8)),
-				Type::Short =>
-					Value::Short(*(content as *mut i16)),
-				Type::Int =>
-					Value::Int(*(content as *mut i32)),
-				Type::Long =>
-					Value::Long(*(content as *mut i64)),
-				Type::Float =>
-					Value::Float(*(content as *mut libc::c_float) as f32),
-				Type::Double =>
-					Value::Double(*(content as *mut libc::c_double) as f64),
-				Type::Boolean =>
-					Value::Boolean(*(content as *mut i32) == 1),
-				Type::Char =>
-					Value::Char(*(content as *mut u8) as char),
-				Type::String => {
-					let ptr = CStr::from_ptr(content as *const libc::c_char);
-					let bytes = ptr.to_bytes();
-					Value::String(str::from_utf8(bytes).unwrap().to_string())
-				},
-				Type::Void =>
-					Value::Void,
-			};
-
-			libc::free(content);
-			result
 		}
 	}
 
-	/// Returns the type of this value, dropping the
-	/// value stored in the enum.
-	pub fn to_type(&self) -> Type {
-		match *self {
-			Value::Byte(_) => Type::Byte,
-			Value::Short(_) => Type::Short,
-			Value::Int(_) => Type::Int,
-			Value::Long(_) => Type::Long,
-			Value::Float(_) => Type::Float,
-			Value::Double(_) => Type::Double,
-			Value::Boolean(_) => Type::Boolean,
-			Value::Char(_) => Type::Char,
-			Value::String(_) => Type::String,
-			Value::Void => Type::Void,
+	/// Load a class by its fully qualified name (including its parent
+	/// packages).
+	///
+	/// The parent packages of the class should be separated by `/` and not `.`,
+	/// as is required by the JNI (eg. `com/ben/Test`, not `com.ben.Test`).
+	///
+	/// The JVM searches all directories and Jar files specified in the
+	/// classpath (given to the JVM in the Options struct provided upon
+	/// initialisation) for a .class file with the given name and parent
+	/// packages.
+	///
+	/// For example, if the classpath contains the directory `/thing`, and we're
+	/// looking for the class `com/ben/Test`, then the JVM will look for a
+	/// `/thing/com/ben/Test.class` file.
+	///
+	/// This can also be used to load standard Java library files like
+	/// `java/lang/String`. Methods can be called on these system classes in
+	/// the same way you'd call methods on your custom classes.
+	pub fn class<'a>(&'a self, name: &str) -> Result<Class<'a>> {
+		// Find the class
+		let cstr = CString::new(name).unwrap();
+		let raw = unsafe { ((**self.env).FindClass)(self.env, cstr.as_ptr()) };
+
+		// Check the class exists
+		if raw == 0 as ffi::jclass {
+			Err(Error::from_exception(self))
+		} else {
+			// Successfully found the class
+			Ok(Class {
+				jvm: self,
+				raw: raw,
+			})
 		}
 	}
 
-	/// Returns the number of bytes this value requires when allocated.
-	pub fn bytes(&self) -> u64 {
-		(match *self {
-			Value::Byte(_) => mem::size_of::<i8>(),
-			Value::Short(_) => mem::size_of::<i16>(),
-			Value::Int(_) => mem::size_of::<i32>(),
-			Value::Long(_) => mem::size_of::<i64>(),
-			Value::Float(_) => mem::size_of::<f32>(),
-			Value::Double(_) => mem::size_of::<f64>(),
-			Value::Boolean(_) => mem::size_of::<u32>(),
-			Value::Char(_) => mem::size_of::<u8>(),
-			Value::String(ref string) =>
-				(mem::size_of::<u8>() * (string.as_bytes().len() + 1)),
-			Value::Void => 0,
-		}) as u64
+	/// Returns true when an exception has occurred.
+	fn has_exception(&self) -> bool {
+		unsafe { ((**self.env).ExceptionCheck)(self.env) == ffi::JNI_TRUE }
 	}
 
-	/// Converts the value from a byte to an i8. Panics if the value is not a byte.
-	pub fn to_i8(&self) -> i8 {
-		match *self {
-			Value::Byte(v) => v,
-			_ => panic!("Calling `to_i8` on value"),
-		}
+	/// Clears the most recently triggered exception.
+	fn clear_exception(&self) {
+		unsafe { ((**self.env).ExceptionClear)(self.env) };
 	}
 
-	/// Converts the value from a short to an i16. Panics if the value is not a short.
-	pub fn to_i16(&self) -> i16 {
-		match *self {
-			Value::Short(v) => v,
-			_ => panic!("Calling `to_i16` on value"),
-		}
-	}
-
-	/// Converts the value from an int to an i32. Panics if the value is not an int.
-	pub fn to_i32(&self) -> i32 {
-		match *self {
-			Value::Int(v) => v,
-			_ => panic!("Calling `to_i32` on value"),
-		}
-	}
-
-	/// Converts the value from a long to an i64. Panics if the value is not a long.
-	pub fn to_i64(&self) -> i64 {
-		match *self {
-			Value::Long(v) => v,
-			_ => panic!("Calling `to_i64` on value"),
-		}
-	}
-
-	/// Converts the value from a float to an f32. Panics if the value is not a float.
-	pub fn to_f32(&self) -> f32 {
-		match *self {
-			Value::Float(v) => v,
-			_ => panic!("Calling `to_f32` on value"),
-		}
-	}
-
-	/// Converts the value from a double to an f64. Panics if the value is not a double.
-	pub fn to_f64(&self) -> f64 {
-		match *self {
-			Value::Double(v) => v,
-			_ => panic!("Calling `to_f64` on value"),
-		}
-	}
-
-	/// Converts the value from a boolean to a bool. Panics if the value is not a boolean.
-	pub fn to_bool(&self) -> bool {
-		match *self {
-			Value::Boolean(v) => v,
-			_ => panic!("Calling `to_bool` on value"),
-		}
-	}
-
-	/// Converts the value to a char. Panics if the value is not a char.
-	pub fn to_char(&self) -> char {
-		match *self {
-			Value::Char(v) => v,
-			_ => panic!("Calling `to_char` on value"),
-		}
-	}
-
-	/// Converts the value to a string. Panics if the value is not a string.
-	pub fn to_string(&self) -> String {
-		match *self {
-			Value::String(ref v) => v.clone(),
-			_ => panic!("Calling `to_string` on value"),
+	/// Get the throwable instance of the most recently occurred exception.
+	fn exception_obj(&self) -> Object {
+		Object {
+			jvm: self,
+			raw: unsafe { ((**self.env).ExceptionOccurred)(self.env) },
 		}
 	}
 }
 
 
-/// A function argument or return type.
-#[derive(Debug, Clone, Copy)]
+
+//
+//  Classes and Objects
+//
+
+/// The prototype of a class, which can be used to instantiate objects of this
+/// class.
+///
+/// The class has a prescribed lifetime, since it cannot outlive the JVM that
+/// created it.
+#[derive(Debug)]
+pub struct Class<'a> {
+	jvm: &'a JavaVM,
+	raw: ffi::jclass,
+}
+
+impl<'a> Class<'a> {
+	/// Returns the fully qualified name of this class as a string.
+	pub fn name(&self) -> String {
+		let mut result = String::new();
+		self.push_name(&mut result);
+		result
+	}
+
+	/// Pushes the fully qualified name of this class (eg. `java/lang/String`)
+	/// to the end of the given string.
+	///
+	/// Separate the `push_name` and `name` functions since we use this function
+	/// to avoid a second heap allocation at other points in our code.
+	fn push_name(&self, result: &mut String) {
+		let env = self.jvm.env;
+
+		// Get the method ID for the function on the class that returns a
+		// string containing the fully qualified class name
+		//
+		// We can't use the `call_static` method on this class, since we have
+		// to treat the class as an object and use `CallObjectMethod`, rather
+		// than `CallStaticObjectMethod`
+		let name = CString::new("getName").unwrap();
+		let signature = CString::new("()Ljava/lang/String;").unwrap();
+		let id = unsafe {
+			((**env).GetMethodID)(
+				env,
+				self.raw,
+				name.as_ptr(),
+				signature.as_ptr()
+			)
+		};
+
+		// Call the method, getting back a JNI version of a string
+		let java_str = unsafe { ((**env).CallObjectMethod)(env, self.raw, id) };
+		convert_string(self.jvm, java_str, result);
+	}
+
+	/// Returns this object's superclass.
+	pub fn superclass(&self) -> Class<'a> {
+		let env = self.jvm.env;
+		Class {
+			jvm: self.jvm,
+			raw: unsafe { ((**env).GetSuperclass)(env, self.raw) },
+		}
+	}
+
+	/// Create an instance of this class.
+	///
+	/// The provided arguments are for the object's constructor. The correct
+	/// overloaded constructor is chosen based on the types of the arguments.
+	pub fn instantiate(&self, args: &[Value]) -> Result<Object<'a>> {
+		let env = self.jvm.env;
+
+		// Get the constructor method ID
+		let name = CString::new("<init>").unwrap();
+		let signature = CString::new(function_signature(args, &Type::Void)).unwrap();
+		let id = unsafe {
+			((**env).GetMethodID)(
+				env,
+				self.raw,
+				name.as_ptr(),
+				signature.as_ptr(),
+			)
+		};
+
+		// Check the constructor exists
+		if id == 0 as ffi::jmethodID {
+			return Err(Error::not_found(self.jvm));
+		}
+
+		// Convert the list of arguments into an array of jvalues
+		let mut java_args = Vec::with_capacity(args.len());
+		for arg in args {
+			java_args.push(arg.to_jvalue(self.jvm));
+
+		}
+
+		// Call the constructor and instantiate the object
+		let obj = unsafe {
+			((**env).NewObjectA)(env, self.raw, id, java_args.as_ptr())
+		};
+
+		// Check for an exception
+		if self.jvm.has_exception() {
+			Err(Error::from_exception(self.jvm))
+		} else {
+			Ok(Object {
+				jvm: self.jvm,
+				raw: obj,
+			})
+		}
+	}
+
+	/// Call a static method on this class.
+	///
+	/// If the function doesn't return a value (ie. a void return type), then
+	/// Value::Void is returned.
+	///
+	/// Value::Void should not be passed as an argument, and will generate an
+	/// exception.
+	pub fn call_static(&self, name: &str, args: &[Value], return_type: Type)
+			-> Result<Value> {
+		let env = self.jvm.env;
+
+		// Get the method ID
+		let fn_sig = function_signature(args, &return_type);
+		let signature = CString::new(fn_sig).unwrap();
+		let name = CString::new(name).unwrap();
+		let method_id = unsafe {
+			((**env).GetStaticMethodID)(
+				env,
+				self.raw,
+				name.as_ptr(),
+				signature.as_ptr(),
+			)
+		};
+
+		// Check the ID exists
+		if method_id == 0 as ffi::jmethodID {
+			return Err(Error::not_found(self.jvm));
+		}
+
+		// Convert the list of arguments into an array of jvalues
+		let mut java_args = Vec::with_capacity(args.len());
+		for arg in args {
+			java_args.push(arg.to_jvalue(self.jvm));
+		}
+
+		// Call the method
+		let result = unsafe {
+			let base: *const ffi::MethodFn = mem::transmute(&(**env).CallStaticObjectMethodA);
+			let offset = return_type.offset() * 3;
+			let fn_ptr = base.offset(offset as isize);
+			(*fn_ptr)(env, self.raw, method_id, java_args.as_ptr())
+		};
+
+		// Convert the result into a value
+		if self.jvm.has_exception() {
+			Err(Error::from_exception(self.jvm))
+		} else {
+			Ok(Value::from_jvalue(result, &return_type, self.jvm))
+		}
+	}
+
+	/// Get the value of a static field on this class.
+	pub fn static_field(&self) {
+
+	}
+
+	/// Set the value of a static field on this class.
+	pub fn set_static_field(&self) {
+
+	}
+}
+
+
+/// An object (an instance of a class), which can have methods called on it and
+/// fields accessed.
+///
+/// The object has a prescribed lifetime, since it cannot outlive the JVM that
+/// created it.
+#[derive(Debug)]
+pub struct Object<'a> {
+	jvm: &'a JavaVM,
+	raw: ffi::jobject,
+}
+
+impl<'a> Object<'a> {
+	/// Returns the class that this object is an instance of.
+	pub fn class(&self) -> Class<'a> {
+		let env = self.jvm.env;
+		Class {
+			jvm: self.jvm,
+			raw: unsafe { ((**env).GetObjectClass)(env, self.raw) },
+		}
+	}
+
+	/// Returns true if this object is an instance of the given class.
+	///
+	/// Both this object and the given class must have been created by the same
+	/// JVM instance, otherwise the result of this function is undefined.
+	pub fn is_instance_of<'b>(&self, other: Class<'b>) -> bool {
+		let env = self.jvm.env;
+		unsafe {
+			((**env).IsInstanceOf)(env, self.raw, other.raw) == ffi::JNI_TRUE
+		}
+	}
+
+	/// Call a method on this object.
+	///
+	/// The function's signature is determined by the types of each argument
+	/// and the given return type. If the signature doesn't match any valid
+	/// function with the given name, then an exception is generated (with no
+	/// stack trace).
+	///
+	/// If the function doesn't return a value (ie. a void return type), then
+	/// Value::Void is returned.
+	///
+	/// Value::Void should not be passed as an argument, and will generate an
+	/// exception.
+	pub fn call(&self, name: &str, args: &[Value], return_type: Type)
+			-> Result<Value> {
+		let env = self.jvm.env;
+
+		// Get the method ID
+		let class = self.class();
+		let fn_sig = function_signature(args, &return_type);
+		let signature = CString::new(fn_sig).unwrap();
+		let name = CString::new(name).unwrap();
+		let method_id = unsafe {
+			((**env).GetMethodID)(
+				env,
+				class.raw,
+				name.as_ptr(),
+				signature.as_ptr(),
+			)
+		};
+
+		// Check the ID exists
+		if method_id == 0 as ffi::jmethodID {
+			return Err(Error::not_found(self.jvm));
+		}
+
+		// Convert the list of arguments into an array of jvalues
+		let mut java_args = Vec::with_capacity(args.len());
+		for arg in args {
+			java_args.push(arg.to_jvalue(self.jvm));
+		}
+
+		// Call the method
+		let result = unsafe {
+			let base: *const ffi::MethodFn = mem::transmute(&(**env).CallObjectMethodA);
+			let offset = return_type.offset() * 3;
+			let fn_ptr = base.offset(offset as isize);
+			(*fn_ptr)(env, self.raw, method_id, java_args.as_ptr())
+		};
+
+		// Convert the result into a value
+		if self.jvm.has_exception() {
+			Err(Error::from_exception(self.jvm))
+		} else {
+			Ok(Value::from_jvalue(result, &return_type, self.jvm))
+		}
+	}
+
+	/// Get the value of a public field on this object.
+	pub fn field() {
+
+	}
+
+	/// Set the value of a public field on this object.
+	pub fn set_field() {
+
+	}
+}
+
+
+
+//
+//  Values and Types
+//
+
+/// The type of a Java value returned from a method.
+#[derive(Debug, Clone)]
 pub enum Type {
+	Boolean,
 	Byte,
+	Char,
 	Short,
 	Int,
 	Long,
 	Float,
 	Double,
-	Boolean,
-	Char,
-	String,
+	Str,
 	Void,
+
+	/// The argument specifies the fully qualified class name of the object,
+	/// eg. `java/lang/String`, using `/` to separate packages.
+	///
+	/// This should be known at compile time, hence the static lifetime on the
+	/// string.
+	Object(&'static str),
 }
 
 impl Type {
-	/// Returns the type signature string for this type.
-	fn signature(&self) -> &str {
-		match *self {
-			Type::Byte => "B",
-			Type::Short => "S",
-			Type::Int => "I",
-			Type::Long => "J",
-			Type::Float => "F",
-			Type::Double => "D",
-			Type::Boolean => "Z",
-			Type::Char => "C",
-			Type::String => "Ljava/lang/String;",
-			Type::Void => "V",
+	/// Returns the function signature component for this value.
+	fn signature(&self) -> &'static str {
+		match self {
+			&Type::Boolean => "Z",
+			&Type::Byte => "B",
+			&Type::Char => "C",
+			&Type::Short => "S",
+			&Type::Int => "I",
+			&Type::Long => "J",
+			&Type::Float => "F",
+			&Type::Double => "D",
+			&Type::Str => "Ljava/lang/String;",
+			&Type::Void => "V",
+			// The object type is handled properly in the calling function
+			&Type::Object(_) => "L",
+		}
+	}
+
+	/// Returns the integer offset of the corresponding method call function
+	/// within the JNIEnv struct.
+	fn offset(&self) -> usize {
+		match self {
+			// Use the `CallObjectMethod` for both objects and strings
+			&Type::Object(_) => 0,
+			&Type::Str => 0,
+			&Type::Boolean => 1,
+			&Type::Byte => 2,
+			&Type::Char => 3,
+			&Type::Short => 4,
+			&Type::Int => 5,
+			&Type::Long => 6,
+			&Type::Float => 7,
+			&Type::Double => 8,
+			&Type::Void => 9,
 		}
 	}
 }
 
 
-//
-//  Function
-//
-
-/// Returns the JNI function signature string for the given function arguments
-/// and return type.
-fn signature_for_function(arguments: &[Value], return_type: Type) -> String {
-	let mut result = String::new();
-	result.push('(');
-
-	for argument in arguments.iter() {
-		result.push_str(argument.to_type().signature());
-	}
-
-	result.push(')');
-	result.push_str(return_type.signature());
-	result
-}
-
-/// Converts each value in the arguments array into a void pointer.
-fn arguments_to_void_pointers<T, F>(arguments: &[Value], callback: F) -> T
-		where F: Fn(Vec<*mut libc::c_void>) -> T {
-	let mut values = Vec::new();
-	for value in arguments.iter() {
-		println!("Converting value {:?}", value);
-		// Protect against passing in void
-		match *value {
-			Value::Void => panic!("Cannot pass `Value::Void` as an argument to a function."),
-			_ => {}
-		}
-
-		let ptr = unsafe {
-			// Allocate heap space for the argument
-			let size = value.bytes();
-			let ptr = libc::malloc(size as usize);
-
-			// Convert to a void pointer
-			match *value {
-				Value::Byte(v) => copy_into_ptr!(v, ptr, size),
-				Value::Short(v) => copy_into_ptr!(v, ptr, size),
-				Value::Int(v) => copy_into_ptr!(v, ptr, size),
-				Value::Long(v) => copy_into_ptr!(v, ptr, size),
-				Value::Float(v) => copy_into_ptr!(v, ptr, size),
-				Value::Double(v) => copy_into_ptr!(v, ptr, size),
-				Value::Char(v) => copy_into_ptr!(v, ptr, size),
-				Value::Boolean(v) => {
-					let as_int: i32 = if v { 1 } else { 0 };
-					copy_into_ptr!(as_int, ptr, size)
-				},
-				Value::String(ref v) => {
-					let string = CString::new(v.as_bytes()).unwrap();
-					let str_ptr = string.as_ptr();
-					ptr::copy(
-						str_ptr as *mut libc::c_void,
-						ptr,
-						size as usize
-					);
-				},
-				_ => {},
+macro_rules! expand {
+	($name:ident, $enum_name:ident, $kind:ty) => {
+		fn $name(self) -> $kind {
+			if let Value::$enum_name(value) = self {
+				value
+			} else {
+				panic!("Cannot convert value (`{:?}`) to {}", self, stringify!($kind));
 			}
+		}
+	};
+}
 
-			ptr
+
+/// A value passed to a method call.
+///
+/// The value has a prescribed lifetime, since it cannot outlive the JVM that
+/// created it.
+#[derive(Debug)]
+pub enum Value<'a> {
+	Boolean(bool),
+	Byte(i8),
+	Char(char),
+	Short(i16),
+	Int(i32),
+	Long(i64),
+	Float(f32),
+	Double(f64),
+	Str(String),
+	Object(Object<'a>),
+	Void,
+}
+
+impl<'a> Value<'a> {
+	/// Returns the function signature component for this value.
+	fn signature(&self) -> &'static str {
+		match self {
+			&Value::Boolean(_) => "Z",
+			&Value::Byte(_) => "B",
+			&Value::Char(_) => "C",
+			&Value::Short(_) => "S",
+			&Value::Int(_) => "I",
+			&Value::Long(_) => "J",
+			&Value::Float(_) => "F",
+			&Value::Double(_) => "D",
+			&Value::Str(_) => "Ljava/lang/String;",
+			&Value::Void => "V",
+			// The object type is handled properly in the calling function
+			&Value::Object(_) => "L",
+		}
+	}
+
+	/// Converts the value into a Java value suitable to pass as an argument to
+	/// an FFI call.
+	fn to_jvalue(&self, jvm: &JavaVM) -> ffi::jvalue {
+		let data = unsafe {
+			match self {
+				&Value::Boolean(v) => mem::transmute(v as u64),
+				&Value::Byte(v) => mem::transmute(v as u64),
+				&Value::Char(v) => mem::transmute(v as u64),
+				&Value::Short(v) => mem::transmute(v as u64),
+				&Value::Int(v) => mem::transmute(v as u64),
+				&Value::Long(v) => mem::transmute(v as u64),
+				&Value::Float(v) => mem::transmute(v as u64),
+				&Value::Double(v) => mem::transmute(v as u64),
+				&Value::Object(ref v) => mem::transmute(v.raw as u64),
+				// TODO: Don't panic, return an exception
+				&Value::Void => panic!("Can't pass void to a function"),
+				&Value::Str(ref v) => {
+					// TODO: Possible memory leak? Where do we dealloc this?
+					// Does the GC do it for us? I assume so...
+					let env = jvm.env;
+					let cstr = CString::new(v.clone()).unwrap();
+					let java_str = ((**env).NewStringUTF)(env, cstr.as_ptr());
+					mem::transmute(java_str as u64)
+				},
+			}
 		};
 
-		values.push(ptr);
+		ffi::jvalue {
+			data: data,
+		}
 	}
 
-	callback(values)
-}
-
-
-
-//
-//  Class
-//
-
-/// A Java class (not an instance of a class).
-#[derive(Debug, Copy, Clone)]
-pub struct Class {
-	java_class: *mut libc::c_void,
-}
-
-impl Class {
-	/// Creates a new instance of this class.
-	pub fn instance(&self, constructor_arguments: &[Value]) -> Result<Object, Error> {
-		let signature = signature_for_function(constructor_arguments, Type::Void);
-
-		arguments_to_void_pointers(constructor_arguments, |mut values| {
-			let mut types = ffi::arguments_to_type_list(constructor_arguments);
-			unsafe {
-				let signature_cstr = CString::new(signature.as_bytes()).unwrap();
-				let object_ptr = ffi::create_object(
-					self.java_class,
-					signature_cstr.as_ptr(),
-					constructor_arguments.len() as i32,
-					types.as_mut_slice().as_mut_ptr(),
-					values.as_mut_slice().as_mut_ptr(),
-				);
-
-
-				if object_ptr.is_null() {
-					Err(Error::from_status_code(ffi::error_status()))
-				} else {
-					Ok(Object {
-						java_object: object_ptr,
-					})
-				}
-			}
-		})
+	/// Converts a Java value into its equivalent Rust version.
+	fn from_jvalue<'b>(value: ffi::jvalue, kind: &Type, jvm: &'b JavaVM)
+			-> Value<'b> {
+		// Depending on the type of the jvalue
+		match kind {
+			&Type::Boolean => Value::Boolean(value.z() == ffi::JNI_TRUE),
+			&Type::Byte => Value::Byte(value.b()),
+			&Type::Char => Value::Char(unsafe {
+				char::from_u32_unchecked(value.c() as u32)
+			}),
+			&Type::Short => Value::Short(value.s()),
+			&Type::Int => Value::Int(value.i()),
+			&Type::Long => Value::Long(value.j()),
+			&Type::Float => Value::Float(value.f()),
+			&Type::Double => Value::Double(value.d()),
+			&Type::Void => Value::Void,
+			&Type::Object(_) => Value::Object(Object {
+				jvm: jvm,
+				raw: value.l(),
+			}),
+			&Type::Str => {
+				// Allocate a new string object and read from the Java string
+				let mut result = String::new();
+				convert_string(jvm, value.l() as ffi::jstring, &mut result);
+				Value::Str(result)
+			},
+		}
 	}
 
-	/// Calls a static method on this class.
-	pub fn call_static_method(&self, name: &str, arguments: &[Value], return_type: Type)
-			-> Result<Value, Error> {
-		let signature = signature_for_function(arguments, return_type);
+	expand!(as_bool, Boolean, bool);
+	expand!(as_byte, Byte, i8);
+	expand!(as_char, Char, char);
+	expand!(as_short, Short, i16);
+	expand!(as_int, Int, i32);
+	expand!(as_long, Long, i64);
+	expand!(as_float, Float, f32);
+	expand!(as_double, Double, f64);
+	expand!(as_object, Object, Object<'a>);
+	expand!(as_str, Str, String);
+}
 
-		arguments_to_void_pointers(arguments, |mut values| {
-			let mut types = ffi::arguments_to_type_list(arguments);
-			unsafe {
-				// Call the static method
-				let name_cstr = CString::new(name.as_bytes()).unwrap();
-				let signature_cstr = CString::new(signature.as_bytes()).unwrap();
-				let return_value = ffi::call_static_method(
-					self.java_class,
-					name_cstr.as_ptr(),
-					signature_cstr.as_ptr(),
-					ffi::type_to_integer(return_type),
-					arguments.len() as i32,
-					types.as_mut_slice().as_mut_ptr(),
-					values.as_mut_slice().as_mut_ptr(),
-				);
+/// Returns the function signature as a string for a method with the given
+/// arguments and return type.
+fn function_signature(args: &[Value], return_type: &Type) -> String {
+	let mut sig = String::new();
 
-				if return_value.is_null() {
-					let status = ffi::error_status();
-					if status == ffi::ERROR_NONE {
-						Ok(Value::Void)
-					} else {
-						Err(Error::from_status_code(status))
-					}
-				} else {
-					Ok(Value::from_ptr(return_type, return_value))
-				}
-			}
-		})
+	// Push the opening bracket for the arguments type list
+	sig.push('(');
+
+	// Iterate over each argument
+	for arg in args {
+		// Each Java type has a 1 character type associated with it, which we
+		// push onto the signature to indicate another argument to the function
+		sig.push_str(arg.signature());
+
+		// We need to push the class name of an object to the string after the
+		// `L` character
+		if let &Value::Object(ref obj) = arg {
+			obj.class().push_name(&mut sig);
+			sig.push(';');
+		}
 	}
+
+	// Push the closing bracket to the arguments list
+	sig.push(')');
+
+	// Push the return type's signature
+	sig.push_str(return_type.signature());
+	if let &Type::Object(name) = return_type {
+		sig.push_str(name);
+		sig.push(';');
+	}
+
+	sig
 }
 
+/// Convert the given Java string into the proper Rust version, and push it onto
+/// the given String.
+fn convert_string(jvm: &JavaVM, java_str: ffi::jstring, result: &mut String) {
+	let env = jvm.env;
 
+	// Convert the JNI string to something we can actually use
+	let name = unsafe {
+		let ptr = ((**env).GetStringUTFChars)(env, java_str, ptr::null_mut());
+		CStr::from_ptr(ptr)
+	};
 
-//
-//  Object
-//
+	// Copy the UTF-8 converted string into a new, heap allocated one
+	let utf8 = name.to_str().unwrap();
+	result.push_str(utf8);
 
-/// An instance of a Java class.
-#[derive(Debug, Copy, Clone)]
-pub struct Object {
-	java_object: *mut libc::c_void,
-}
-
-impl Object {
-	/// Calls a method on this object instance.
-	pub fn call(&self, name: &str, arguments: &[Value], return_type: Type)
-			-> Result<Value, Error> {
-		let signature = signature_for_function(arguments, return_type);
-
-		arguments_to_void_pointers(arguments, |mut values| {
-			let mut types = ffi::arguments_to_type_list(arguments);
-			unsafe {
-
-				// Call the static method
-				let name_cstr = CString::new(name.as_bytes()).unwrap();
-				let signature_cstr = CString::new(signature.as_bytes()).unwrap();
-				let return_value = ffi::call_method(
-					self.java_object,
-					name_cstr.as_ptr(),
-					signature_cstr.as_ptr(),
-					ffi::type_to_integer(return_type),
-					arguments.len() as i32,
-					types.as_mut_slice().as_mut_ptr(),
-					values.as_mut_slice().as_mut_ptr(),
-				);
-
-				if return_value.is_null() {
-					let status = ffi::error_status();
-					if status == ffi::ERROR_NONE {
-						Ok(Value::Void)
-					} else {
-						Err(Error::from_status_code(status))
-					}
-				} else {
-					Ok(Value::from_ptr(return_type, return_value))
-				}
-			}
-		})
+	// Free the java string
+	unsafe {
+		((**env).ReleaseStringUTFChars)(env, java_str, name.as_ptr());
 	}
 }
 
 
 
 //
-//  Errors
+//  Error Handling
 //
 
-/// Possible errors that may occur.
-#[derive(Debug, Copy, Clone)]
+/// A result type that wraps the JVM initialisation error.
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// An error returned when creating an instance of a JVM.
 pub enum Error {
-	/// Triggered when the creation of the Java virtual machine
-	/// in the `JavaVM::new` function fails.
-	VirtualMachineCreationFailed,
+	/// An unsupported version error.
+	UnsupportedVersion,
 
-	/// Triggered if a second Java virtual machine is created.
-	VirtaulMachineAlreadyExists,
+	/// An out of memory error.
+	OutOfMemory,
 
-	/// Triggered if an error occurred when attempting to allocate
-	/// heap memory.
-	MemoryAllocationFailure,
+	/// An internal FFI error.
+	FFIError(ffi::JNIError),
 
-	/// Triggered when a class could not be found from its name.
-	ClassNotFound,
+	/// Triggered when the required class, method, or field could not be found,
+	/// either because no item with the given name was found, or the signature
+	/// of a static or non-static method was incorrect (eg. the return type
+	/// doesn't match that in the Java code).
+	///
+	/// This error is a specialised version of the Exception error below.
+	NotFound(Option<ExceptionInfo>),
 
-	/// Triggered when a method could not be found, either because
-	/// the function with the given name doesn't exist, or the
-	/// method signature does not match.
-	MethodNotFound,
-
-	/// Triggered when an exception occurs.
-	ExceptionOccurred,
-
-	/// Triggered if another internal error occurred.
-	InternalError,
+	/// An exception raised in Java code.
+	Exception(ExceptionInfo),
 }
 
 impl Error {
-	/// Creates an error from a status code.
-	fn from_status_code(code: i32) -> Error {
+	/// Create a new error from an underlying FFI code.
+	fn from_ffi(code: ffi::JNIError) -> Error {
 		match code {
-			ffi::ERROR_COULD_NOT_CREATE_VM => Error::VirtualMachineCreationFailed,
-			ffi::ERROR_VM_ALREADY_EXISTS => Error::VirtaulMachineAlreadyExists,
-			ffi::ERROR_COULD_NOT_ALLOCATE_MEMORY => Error::MemoryAllocationFailure,
-			ffi::ERROR_CLASS_NOT_FOUND => Error::ClassNotFound,
-			ffi::ERROR_METHOD_NOT_FOUND => Error::MethodNotFound,
-			ffi::ERROR_EXCEPTION_OCCURRED => Error::ExceptionOccurred,
-			_ => Error::InternalError,
+			ffi::JNIError::JNI_EVERSION => Error::UnsupportedVersion,
+			ffi::JNIError::JNI_ENOMEM => Error::OutOfMemory,
+			_ => Error::FFIError(code),
 		}
+	}
+
+	/// Create a new not found error from the most recent exception.
+	fn not_found(jvm: &JavaVM) -> Error {
+		Error::NotFound(if jvm.has_exception() {
+			if let Error::Exception(info) = Error::from_exception(jvm) {
+				Some(info)
+			} else {
+				None
+			}
+		} else {
+			None
+		})
+	}
+
+	/// Create a new error from the most recent exception. The caller guarantees
+	/// that an exception has occurred.
+	fn from_exception(jvm: &JavaVM) -> Error {
+		// Get the thrown exception
+		let obj = jvm.exception_obj();
+		jvm.clear_exception();
+
+		// Get the class name
+		let name = obj.class().name();
+
+		// Get the message associated with the error
+		let result = obj.call("getMessage", &[], Type::Str).unwrap().as_str();
+
+		// Get the stack trace by creating a StringWriter, giving it to a
+		// PrintWriter, then calling printStackTrace on the exception
+		Error::OutOfMemory // for now
+	}
+}
+
+impl error::Error for Error {
+	fn description<'a>(&'a self) -> &'a str {
+		match self {
+			&Error::UnsupportedVersion => "Unsupported JVM version",
+			&Error::OutOfMemory => "Out of memory",
+			&Error::Exception(ref info) => info.message(),
+			&Error::NotFound(ref info) => if let &Some(ref exception) = info {
+				exception.message()
+			} else {
+				"Class, method, or field not found"
+			},
+			&Error::FFIError(code) => match code {
+				ffi::JNIError::JNI_OK => "Success?",
+				ffi::JNIError::JNI_ERR => "Unknown error",
+				ffi::JNIError::JNI_EDETACHED => "Thread detached from JVM",
+				ffi::JNIError::JNI_EVERSION => "Unsupported JVM version",
+				ffi::JNIError::JNI_ENOMEM => "Out of memory",
+				ffi::JNIError::JNI_EEXIST => "JVM has already been created",
+				ffi::JNIError::JNI_EINVAL => "Invalid arguments to JNI function",
+			},
+		}
+	}
+}
+
+impl fmt::Display for Error {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		use std::error::Error;
+		write!(f, "{}", self.description())
+	}
+}
+
+impl fmt::Debug for Error {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		write!(f, "{}", self)
+	}
+}
+
+
+/// Information associated with an exception.
+pub struct ExceptionInfo {
+	name: String,
+	message: String,
+	stack_trace: String,
+}
+
+impl ExceptionInfo {
+	/// Returns the class name of the exception.
+	pub fn name<'a>(&'a self) -> &'a str {
+		&self.name
+	}
+
+	/// Returns the detailed error message associated with the exception.
+	pub fn message<'a>(&'a self) -> &'a str {
+		&self.message
+	}
+
+	/// Returns a pretty printed version of the exception's stack trace.
+	pub fn stack_trace<'a>(&'a self) -> &'a str {
+		&self.stack_trace
+	}
+}
+
+impl fmt::Display for ExceptionInfo {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		writeln!(f, "ERROR: {}", self.message)?;
+		writeln!(f, "{}", self.stack_trace)
+	}
+}
+
+impl fmt::Debug for ExceptionInfo {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		write!(f, "{}", self)
 	}
 }

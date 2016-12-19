@@ -1,12 +1,7 @@
 [package]
-
-name = "jni"
+name = "rjni"
 version = "0.0.1"
 authors = ["Ben Anderson <gravityscore@gmail.com>"]
-build = "build.rs"
-
-[build-dependencies]
-gcc = "*"
 
 [dependencies]
 libc = "*"
