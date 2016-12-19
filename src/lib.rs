@@ -407,6 +407,11 @@ impl JavaVM {
 			raw: unsafe { ((**self.env).ExceptionOccurred)(self.env) },
 		}
 	}
+
+	/// Print the current exception, used for debugging purposes.
+	fn print_exception(&self) {
+		unsafe { ((**self.env).ExceptionDescribe)(self.env) }
+	}
 }
 
 
@@ -427,43 +432,6 @@ pub struct Class<'a> {
 }
 
 impl<'a> Class<'a> {
-	/// Returns the fully qualified name of this class as a string.
-	pub fn name(&self) -> String {
-		let mut result = String::new();
-		self.push_name(&mut result);
-		result
-	}
-
-	/// Pushes the fully qualified name of this class (eg. `java/lang/String`)
-	/// to the end of the given string.
-	///
-	/// Separate the `push_name` and `name` functions since we use this function
-	/// to avoid a second heap allocation at other points in our code.
-	fn push_name(&self, result: &mut String) {
-		let env = self.jvm.env;
-
-		// Get the method ID for the function on the class that returns a
-		// string containing the fully qualified class name
-		//
-		// We can't use the `call_static` method on this class, since we have
-		// to treat the class as an object and use `CallObjectMethod`, rather
-		// than `CallStaticObjectMethod`
-		let name = CString::new("getName").unwrap();
-		let signature = CString::new("()Ljava/lang/String;").unwrap();
-		let id = unsafe {
-			((**env).GetMethodID)(
-				env,
-				self.raw,
-				name.as_ptr(),
-				signature.as_ptr()
-			)
-		};
-
-		// Call the method, getting back a JNI version of a string
-		let java_str = unsafe { ((**env).CallObjectMethod)(env, self.raw, id) };
-		convert_string(self.jvm, java_str, result);
-	}
-
 	/// Returns this object's superclass.
 	pub fn superclass(&self) -> Class<'a> {
 		let env = self.jvm.env;
@@ -494,7 +462,7 @@ impl<'a> Class<'a> {
 
 		// Check the constructor exists
 		if id == 0 as ffi::jmethodID {
-			return Err(Error::not_found(self.jvm));
+			return Err(Error::from_exception(self.jvm));
 		}
 
 		// Convert the list of arguments into an array of jvalues
@@ -582,7 +550,7 @@ impl<'a> Class<'a> {
 		// Get the method ID and check it exists
 		let method_id = self.static_method_id(name, args, &return_type);
 		if method_id == 0 as ffi::jmethodID {
-			return Err(Error::not_found(self.jvm));
+			return Err(Error::from_exception(self.jvm));
 		}
 
 		// Convert the list of arguments into an array of jvalues
@@ -645,7 +613,7 @@ impl<'a> Class<'a> {
 		// Get the field ID and check it exists
 		let field_id = self.static_field_id(name, &kind);
 		if field_id == 0 as ffi::jfieldID {
-			return Err(Error::not_found(self.jvm));
+			return Err(Error::from_exception(self.jvm));
 		}
 
 		// Get the contents of the field
@@ -672,7 +640,7 @@ impl<'a> Class<'a> {
 		// Get the field ID and check it exists
 		let field_id = self.static_field_id(name, &value);
 		if field_id == 0 as ffi::jfieldID {
-			return Err(Error::not_found(self.jvm));
+			return Err(Error::from_exception(self.jvm));
 		}
 
 		// Convert the value into a useable form
@@ -708,6 +676,16 @@ pub struct Object<'a> {
 }
 
 impl<'a> Object<'a> {
+	/// Returns the fully qualified name of the class this object is an instance
+	/// of as a string.
+	pub fn class_name(&self) -> Result<String> {
+		// Get the corresponding class object
+		let class_obj = self.call("getClass", &[], Type::Object("java/lang/Class"))?.as_object();
+
+		// Call the `getName` method on the class object
+		Ok(class_obj.call("getName", &[], Type::Str)?.as_str())
+	}
+
 	/// Returns the class that this object is an instance of.
 	pub fn class(&self) -> Class<'a> {
 		let env = self.jvm.env;
@@ -748,7 +726,7 @@ impl<'a> Object<'a> {
 		let class = self.class();
 		let method_id = class.method_id(name, args, &return_type);
 		if method_id == 0 as ffi::jmethodID {
-			return Err(Error::not_found(self.jvm));
+			return Err(Error::from_exception(self.jvm));
 		}
 
 		// Convert the list of arguments into an array of jvalues
@@ -781,7 +759,7 @@ impl<'a> Object<'a> {
 		let class = self.class();
 		let field_id = class.field_id(name, &kind);
 		if field_id == 0 as ffi::jfieldID {
-			return Err(Error::not_found(self.jvm));
+			return Err(Error::from_exception(self.jvm));
 		}
 
 		// Get the contents of the field
@@ -808,7 +786,7 @@ impl<'a> Object<'a> {
 		let class = self.class();
 		let field_id = class.field_id(name, &value);
 		if field_id == 0 as ffi::jfieldID {
-			return Err(Error::not_found(self.jvm));
+			return Err(Error::from_exception(self.jvm));
 		}
 
 		// Convert the value into a useable form
@@ -1064,7 +1042,7 @@ impl<'a> Signature for Value<'a> {
 	fn signature(&self) -> String {
 		let mut result = String::from(self.static_signature());
 		if let &Value::Object(ref obj) = self {
-			obj.class().push_name(&mut result);
+			result.push_str(&obj.class_name().unwrap());
 		}
 		result
 	}
@@ -1087,7 +1065,7 @@ fn function_signature(args: &[Value], return_type: &Type) -> String {
 		// We need to push the class name of an object to the string after the
 		// `L` character
 		if let &Value::Object(ref obj) = arg {
-			obj.class().push_name(&mut sig);
+			sig.push_str(&obj.class_name().unwrap());
 			sig.push(';');
 		}
 	}
@@ -1146,14 +1124,6 @@ pub enum Error {
 	/// An internal FFI error.
 	FFIError(ffi::JNIError),
 
-	/// Triggered when the required class, method, or field could not be found,
-	/// either because no item with the given name was found, or the signature
-	/// of a static or non-static method was incorrect (eg. the return type
-	/// doesn't match that in the Java code).
-	///
-	/// This error is a specialised version of the Exception error below.
-	NotFound(Option<ExceptionInfo>),
-
 	/// An exception raised in Java code.
 	Exception(ExceptionInfo),
 }
@@ -1168,35 +1138,24 @@ impl Error {
 		}
 	}
 
-	/// Create a new not found error from the most recent exception.
-	fn not_found(jvm: &JavaVM) -> Error {
-		Error::NotFound(if jvm.has_exception() {
-			if let Error::Exception(info) = Error::from_exception(jvm) {
-				Some(info)
-			} else {
-				None
-			}
-		} else {
-			None
-		})
-	}
-
 	/// Create a new error from the most recent exception. The caller guarantees
 	/// that an exception has occurred.
 	fn from_exception(jvm: &JavaVM) -> Error {
-//		// Get the thrown exception
-//		let obj = jvm.exception_obj();
-//		jvm.clear_exception();
-//
-//		// Get the class name
-//		let name = obj.class().name();
-//
-//		// Get the message associated with the error
-//		let result = obj.call("getMessage", &[], Type::Str).unwrap().as_str();
+		// Get the thrown exception
+		let obj = jvm.exception_obj();
+		jvm.clear_exception();
 
-		// Get the stack trace by creating a StringWriter, giving it to a
-		// PrintWriter, then calling printStackTrace on the exception
-		Error::OutOfMemory // for now
+		// Class name
+		let class_name = obj.class_name().unwrap();
+
+		// Get the message associated with the error
+		let msg = obj.call("toString", &[], Type::Str).unwrap().as_str();
+
+		// Create the exception object
+		Error::Exception(ExceptionInfo {
+			name: class_name,
+			message: msg,
+		})
 	}
 }
 
@@ -1206,11 +1165,6 @@ impl error::Error for Error {
 			&Error::UnsupportedVersion => "Unsupported JVM version",
 			&Error::OutOfMemory => "Out of memory",
 			&Error::Exception(ref info) => info.message(),
-			&Error::NotFound(ref info) => if let &Some(ref exception) = info {
-				exception.message()
-			} else {
-				"Class, method, or field not found"
-			},
 			&Error::FFIError(code) => match code {
 				ffi::JNIError::JNI_OK => "Success?",
 				ffi::JNIError::JNI_ERR => "Unknown error",
@@ -1226,8 +1180,15 @@ impl error::Error for Error {
 
 impl fmt::Display for Error {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		use std::error::Error;
-		write!(f, "{}", self.description())
+		match self {
+			&Error::Exception(ref info) => {
+				info.fmt(f)
+			},
+			_ => {
+				use std::error::Error;
+				write!(f, "{}", self.description())
+			},
+		}
 	}
 }
 
@@ -1242,7 +1203,6 @@ impl fmt::Debug for Error {
 pub struct ExceptionInfo {
 	name: String,
 	message: String,
-	stack_trace: String,
 }
 
 impl ExceptionInfo {
@@ -1255,17 +1215,11 @@ impl ExceptionInfo {
 	pub fn message<'a>(&'a self) -> &'a str {
 		&self.message
 	}
-
-	/// Returns a pretty printed version of the exception's stack trace.
-	pub fn stack_trace<'a>(&'a self) -> &'a str {
-		&self.stack_trace
-	}
 }
 
 impl fmt::Display for ExceptionInfo {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		writeln!(f, "ERROR: {}", self.message)?;
-		writeln!(f, "{}", self.stack_trace)
+		writeln!(f, "[ERROR] {}", self.message)
 	}
 }
 

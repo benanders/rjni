@@ -35,7 +35,7 @@ fn main() {
 
 	// Load the `Test` class. The JVM will look for a `Test.class` file in
 	// the classpath to find it.
-	let class = jvm.class("Test").unwrap();
+	let class = jvm.class("Testlol").unwrap();
 
 	// Create an instance of the `Test` class. The array of values are the
 	// arguments to be passed to the class' constructor. In this case, the Test
